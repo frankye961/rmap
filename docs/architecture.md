@@ -2,7 +2,7 @@
 
 CLI input becomes a validated scan configuration. The scanner consumes that configuration and produces structured results. Reporting displays the measured results. When explicitly requested, the AI service receives completed scan results and returns a separate interpretation for reporting. AI connection configuration remains separate from scan configuration.
 
-The intended types are described here in prose; none are implemented yet:
+The types are described here in prose. `PortStatus` and `ScanResult` are implemented; the others remain planned:
 
 - `ScanConfig` represents the validated target, selected ports, and connection timeout for a scan.
 - `PortStatus` represents a classified outcome of one connection attempt, with uncertainty retained where appropriate.

@@ -7,5 +7,10 @@ mod report;
 mod scanner;
 
 fn main() {
-    println!("rust-nmap skeleton is ready; scanning is not implemented.");
+    let results = scanner::scan(
+        "192.168.100.1".to_string(),
+        std::time::Duration::from_secs(5),
+        &["80"],
+    );
+    report::print_results(&results);
 }

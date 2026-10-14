@@ -1,65 +1,49 @@
 # rust-nmap
 
-A learning project for a Rust TCP connect scanner with optional AI-assisted interpretation of completed scan results.
-
-## Current status
-
-This repository is a dependency-free skeleton. The executable only prints a placeholder message. It does not parse CLI options, scan ports, or contact an AI provider. See [milestone 1](docs/milestone-1.md) for the first implementation steps. Functional AI integration, concurrency, and host discovery are later work; the presence of modules and documentation does not mean these features are implemented.
+`rust-nmap` is a Rust learning project for TCP connect port scanning. It attempts a connection to each selected port, keeps the measured outcome in a structured result, and prints a report. The design also separates optional AI interpretation from measured scan results.
 
 ## Build and run
 
-Use stable Rust with edition 2024 support.
+Use stable Rust with edition 2024 support. Set the target address, port strings, and timeout in `src/main.rs` before running the executable. Scan only targets you are authorized to test.
 
 ```bash
 cargo build --release
 ./target/release/rust-nmap
 ```
 
-To install the executable named `rust-nmap`:
+To install the executable:
 
 ```bash
 cargo install --path . --locked
 rust-nmap
 ```
 
-Cargo's binary installation directory (usually `~/.cargo/bin`) must be on `PATH` to invoke the installed executable by name. Both ways of running it currently print the placeholder message.
+Cargo's binary installation directory, usually `~/.cargo/bin`, must be on `PATH` to invoke `rust-nmap` by name.
 
-## Planned CLI
+## Scan results
 
-These examples show intended future commands. The options are not implemented yet:
+The scanner returns one `ScanResult` for each attempted connection. A result records the port, a `PortStatus`, the connection time, and any connection error. Reporting displays these measurements separately from AI interpretation.
 
-```bash
-rust-nmap --target 127.0.0.1 --ports 22,80,8080 --timeout-ms 1000
+- `open`: a TCP connection succeeded. This does not identify the service or prove a vulnerability.
+- `closed`: the connection was refused.
+- `filtered`: a tentative label for a connection timeout. One timeout does not prove filtering or that the host is offline.
+- `undetermined`: another connection error prevented classification.
 
-rust-nmap --target 127.0.0.1 --ports 22,80,8080 --timeout-ms 1000 --ai
-```
+After a successful connection, the handler may read up to 512 bytes with a read timeout. Received bytes are observations; a read failure does not change an already successful connection into a closed port.
 
-AI will be disabled by default and enabled with `--ai`. Only scan targets you are authorized to test.
+## Code layout
 
-## Module map
-
-| Module | Planned responsibility |
+| Path | Responsibility |
 | --- | --- |
-| `main.rs` | Entry point and orchestration |
-| `config.rs` | CLI parsing and scan configuration validation |
-| `model.rs` | Scan configuration and result types |
-| `scanner.rs` | TCP connection attempts and outcome classification |
-| `report.rs` | Display measured results and separate AI interpretation |
-| `ai/config.rs` | AI connection settings and validation |
-| `ai/service.rs` | Request preparation, HTTP calls, response handling, and interpretation |
-| `ai/mod.rs` | AI module declarations |
+| `src/main.rs` | Select the target and ports, then coordinate scanning and reporting |
+| `src/model.rs` | Scan result and port status types |
+| `src/scanner.rs` | Sequential TCP connection attempts and outcome classification |
+| `src/report.rs` | Display measured results |
+| `src/config.rs` | Scan configuration and CLI boundary |
+| `src/ai/` | Separate AI connection settings and interpretation boundary |
 
-See [architecture](docs/architecture.md) and [AI integration](docs/ai-integration.md) for the intended data flow and boundaries.
+See [architecture](docs/architecture.md) and [AI integration](docs/ai-integration.md) for the intended separation of responsibilities.
 
-## AI configuration template
+## AI configuration
 
-`.env.example` documents these future environment variables:
-
-| Variable | Meaning |
-| --- | --- |
-| `RUST_NMAP_AI_BASE_URL` | AI API server address |
-| `RUST_NMAP_AI_API_KEY` | Authentication credential, when required by the provider |
-| `RUST_NMAP_AI_MODEL` | Chosen model identifier |
-| `RUST_NMAP_AI_TIMEOUT_MS` | Maximum duration of an AI request, in milliseconds |
-
-The planned AI configuration reads environment variables when AI is requested. Missing or invalid AI settings matter only with `--ai`; authentication requirements depend on the provider. `.env.example` is a template, and automatic `.env` loading is not implemented. A local `.env` file would require separate loading or environment export before a future run. Keep credentials out of source control, logs, and reports. Local `.env` and `.env.*` files are ignored, while `.env.example` is tracked.
+[`.env.example`](.env.example) documents the AI API base URL, optional API key, model identifier, and request timeout. It is a template: the executable does not automatically load `.env` files or make AI requests. Keep credentials out of source control, logs, and reports.
