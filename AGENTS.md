@@ -1,7 +1,6 @@
 # Project instructions
 
 - This is a learning project. Implement only the explicitly requested task.
-- The current task authorizes scaffolding and documentation only.
 - Prefer simple functions, structs, and enums.
 - Keep changes small and explain their purpose.
 - Keep CLI parsing, scanning, reporting, and AI responsibilities separate.
