@@ -1,0 +1,10 @@
+/target/
+/.git-local/
+.env
+.env.*
+!.env.example
+.idea/
+.vscode/
+*.swp
+*.swo
+*~

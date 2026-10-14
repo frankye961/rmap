@@ -1,0 +1,10 @@
+# Milestone 1: sequential TCP connect scanning
+
+Implement a basic scan one step at a time. Functional AI integration, concurrency, and host discovery belong to later milestones; their scaffolding does not mean they work today.
+
+- [ ] **1. Scan one port.** Goal: attempt a TCP connection to one explicitly chosen target and port. Learn `std::net::TcpStream`, address handling, timeouts, and `Result`. Completion: an authorized local test can distinguish a successful connection from an unsuccessful attempt without a panic.
+- [ ] **2. Define custom result types and classify outcomes.** Goal: represent the attempt and its outcome without losing useful error information. Learn structs, enums, pattern matching, and ownership. Completion: each attempt yields a structured result whose reported status agrees with the observed connection outcome; ambiguous errors remain appropriately uncertain.
+- [ ] **3. Parse and validate CLI input.** Goal: accept a target, port selection, and timeout with clear errors for invalid values. Learn `std::env::args`, string parsing, error handling, and validation. Completion: valid input produces a scan configuration; invalid input exits with an understandable message before scanning.
+- [ ] **4. Scan multiple ports sequentially.** Goal: iterate over validated ports and collect a result for each. Learn iterators, vectors, borrowing, and control flow. Completion: every selected port receives one result in a predictable order.
+- [ ] **5. Print a readable report.** Goal: display measured results clearly. Learn formatting and separation of data from presentation. Completion: a user can identify each selected port and its measured status without interpreting debug output.
+- [ ] **6. Verify behavior and update documentation.** Goal: check the implementation against known authorized local endpoints and document the actual CLI. Learn Rust test and Cargo workflows. Completion: formatting, compilation, lint checks, and meaningful behavior checks pass; README examples match implemented behavior.
