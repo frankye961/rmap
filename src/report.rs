@@ -2,18 +2,35 @@
 
 use crate::model::{PortStatus, ScanResult};
 
-pub fn print_results(results: &[ScanResult]) {
+pub fn print_results(target: &str, results: &[ScanResult]) {
+    println!("Scan results for {target}\n");
+    println!("{:<9} {:<12} {:>11}  DETAIL", "PORT", "STATE", "CONNECT");
+    println!("{}", "-".repeat(72));
+
     for result in results {
         let status = match result.status {
             PortStatus::Open => "open",
             PortStatus::Closed => "closed",
-            PortStatus::Filtered => "filtered (tentative: connection timed out)",
+            PortStatus::Filtered => "filtered",
             PortStatus::Unknown => "undetermined",
         };
+        let detail = result
+            .error
+            .as_deref()
+            .or(result.observation.as_deref())
+            .unwrap_or("-");
+        println!(
+            "{:<9} {:<12} {:>8.2} ms  {detail}",
+            format!("{}/tcp", result.port),
+            status,
+            result.elapsed.as_secs_f64() * 1_000.0
+        );
+    }
 
-        println!("{}/tcp {status} ({:?})", result.port, result.elapsed);
-        if let Some(error) = &result.error {
-            println!("  {error}");
-        }
+    if results
+        .iter()
+        .any(|result| result.status == PortStatus::Filtered)
+    {
+        println!("\nfiltered = connection timed out; filtering is unconfirmed.");
     }
 }
