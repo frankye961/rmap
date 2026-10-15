@@ -1,6 +1,8 @@
 [package]
 name = "rust-nmap"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 
 [dependencies]
+reqwest = { version = "0.13", default-features = false }
+tokio = { version = "1", features = ["macros", "rt"] }

@@ -4,8 +4,11 @@ use crate::model::{PortStatus, ScanResult};
 
 pub fn print_results(target: &str, results: &[ScanResult]) {
     println!("Scan results for {target}\n");
-    println!("{:<9} {:<12} {:>11}  DETAIL", "PORT", "STATE", "CONNECT");
-    println!("{}", "-".repeat(72));
+    println!(
+        "{:<9} {:<12} {:<9} {:>11}  DETAIL",
+        "PORT", "STATE", "SERVICE", "CONNECT"
+    );
+    println!("{}", "-".repeat(82));
 
     for result in results {
         let status = match result.status {
@@ -20,9 +23,10 @@ pub fn print_results(target: &str, results: &[ScanResult]) {
             .or(result.observation.as_deref())
             .unwrap_or("-");
         println!(
-            "{:<9} {:<12} {:>8.2} ms  {detail}",
+            "{:<9} {:<12} {:<9} {:>8.2} ms  {detail}",
             format!("{}/tcp", result.port),
             status,
+            result.service.as_deref().unwrap_or("-"),
             result.elapsed.as_secs_f64() * 1_000.0
         );
     }
