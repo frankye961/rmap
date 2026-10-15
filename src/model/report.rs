@@ -1,0 +1,84 @@
+//! Presentation of measured results and separate AI interpretation.
+
+use crate::model::{AiAnalysis, PortStatus, ScanResult};
+
+pub fn print_results(target: &str, results: &[ScanResult]) {
+    println!("Scan results for {target}\n");
+    println!(
+        "{:<9} {:<12} {:<9} {:>11}  DETAIL",
+        "PORT", "STATE", "SERVICE", "CONNECT"
+    );
+    println!("{}", "-".repeat(82));
+
+    for result in results {
+        let status = match result.status {
+            PortStatus::Open => "open",
+            PortStatus::Closed => "closed",
+            PortStatus::Filtered => "filtered",
+            PortStatus::Unknown => "undetermined",
+        };
+        let detail = result
+            .error
+            .as_deref()
+            .or(result.observation.as_deref())
+            .unwrap_or("-");
+        println!(
+            "{:<9} {:<12} {:<9} {:>8.2} ms  {detail}",
+            format!("{}/tcp", result.port),
+            status,
+            result.service.as_deref().unwrap_or("-"),
+            result.elapsed.as_secs_f64() * 1_000.0
+        );
+    }
+
+    if results
+        .iter()
+        .any(|result| result.status == PortStatus::Filtered)
+    {
+        println!("\nfiltered = connection timed out; filtering is unconfirmed.");
+    }
+}
+
+pub fn print_ai_analysis(analysis: &AiAnalysis) {
+    println!("\n╭─ AI INTERPRETATION {}", "─".repeat(55));
+    for line in analysis.interpretation.lines().take(20) {
+        print_wrapped(line);
+    }
+    println!("│");
+    println!("│  LOCAL CVE ADVISORY CANDIDATES");
+    if analysis.candidates.is_empty() {
+        println!("│  No exact-version advisory match was supplied.");
+    } else {
+        for candidate in &analysis.candidates {
+            print_wrapped(&format!(
+                "{}  {}/tcp  {} {}",
+                candidate.id, candidate.port, candidate.product, candidate.version
+            ));
+            print_wrapped(&candidate.description);
+            print_wrapped(&format!("Source: {}", candidate.source));
+            println!("│");
+        }
+    }
+    println!("│  Candidate matches require manual verification, including vendor fixes.");
+    println!("╰{}", "─".repeat(76));
+}
+
+fn print_wrapped(text: &str) {
+    let clean: String = text
+        .chars()
+        .filter(|ch| !ch.is_control())
+        .take(400)
+        .collect();
+    let mut line = String::from("│  ");
+    for word in clean.split_whitespace() {
+        if line.chars().count() + word.chars().count() + 1 > 76 {
+            println!("{line}");
+            line = String::from("│  ");
+        }
+        if line.len() > "│  ".len() {
+            line.push(' ');
+        }
+        line.push_str(word);
+    }
+    println!("{line}");
+}

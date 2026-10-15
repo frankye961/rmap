@@ -1,11 +1,11 @@
-//! Sequential TCP connection attempts and their measured outcomes.
+//! Sequential TCP scans, passive banners, and the HTTP probe.
 
 use std::io::ErrorKind;
 use std::io::Read;
 use std::net::{SocketAddr, TcpStream};
 use std::time::{Duration, Instant};
 
-use crate::http;
+mod http;
 use crate::model::{PortStatus, ScanResult};
 
 pub fn scan(address: String, timeout: Duration, ports: &[&str]) -> Vec<ScanResult> {
@@ -106,12 +106,16 @@ fn calculate_remaning_timeout(started: Instant, timeout: Duration) -> Duration {
 }
 
 fn format_preview(data: &[u8]) -> String {
+    let data = data
+        .strip_suffix(b"\r\n")
+        .or_else(|| data.strip_suffix(b"\n"))
+        .unwrap_or(data);
     let preview_len = data.len().min(64);
     let preview = create_preview(&data[..preview_len], preview_len);
     if data.len() > preview_len {
-        format!("\"{preview}\" (preview truncated)")
+        format!("{preview} (preview truncated)")
     } else {
-        format!("\"{preview}\"")
+        preview
     }
 }
 
@@ -148,13 +152,5 @@ fn create_preview(data: &[u8], preview_len: usize) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::banner_result;
-
-    #[test]
-    fn ssh_banner_sets_service_without_byte_count() {
-        let (service, detail) = banner_result(b"SSH-2.0-OpenSSH_10.0\r\n", "");
-        assert_eq!(service.as_deref(), Some("ssh"));
-        assert_eq!(detail, "\"SSH-2.0-OpenSSH_10.0\\r\\n\"");
-    }
-}
+#[path = "../../tests/scan/scanner.rs"]
+mod tests;

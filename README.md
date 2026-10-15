@@ -1,88 +1,144 @@
 # rust-nmap
 
-`rust-nmap` is a Rust learning project for TCP connect scanning. Given an IPv4 address and a list of TCP ports, it attempts each connection in order, records the measured outcome, and prints a report. The project is designed to add optional AI-assisted interpretation of completed results while keeping those interpretations separate from network measurements.
+`rust-nmap` aims to be a network scanner inspired by Nmap, written in Rust and extended with AI interpretation. Its goal is to find and describe exposed services, then help a user understand what observed service versions might mean, including possible CVE leads. Scan measurements and AI conclusions stay separate so the tool can show what it observed without presenting a model's guess as a fact.
 
-## Start a scan
+The current implementation is a starting point for that aim: it scans selected TCP ports on one IPv4 address, collects limited banners, probes HTTP on port 80, and can ask DeepSeek to interpret the results using a local CVE advisory file. It does not yet offer Nmap's range of scan methods, host discovery, concurrent scanning, broad service fingerprinting, or live CVE database searches. Building it is also a way to learn Rust networking, I/O, timeouts, and error handling.
 
-Install stable Rust with edition 2024 support. From the repository root, run:
+## How a run works
+
+1. The CLI validates an IPv4 target, a comma-separated list of TCP ports, and a positive timeout.
+2. For each port, the scanner attempts a TCP connection and records its elapsed connection time and outcome in a `ScanResult`.
+3. On an open port other than 80, it reads a passive banner. On open port 80, it sends an HTTP `HEAD` probe using a separate connection.
+4. The report prints the measured results before any optional AI work.
+5. With `--ai`, the program loads AI settings, retrieves matching entries from an optional local advisory file, and sends bounded observations to DeepSeek through Rig. It prints the interpretation in a separate section. AI errors leave the scan report visible.
+
+The startup banner shows a crab, the tool name, and the program version.
+
+## Build and run
+
+Install a stable Rust toolchain with edition 2024 support. From the repository root, run:
 
 ```bash
 cargo run -- --target 127.0.0.1 --ports 22,80,8080 --timeout-ms 1000
 ```
 
-The `--` passes the following arguments to `rust-nmap` rather than Cargo. This command starts a scan immediately. Use only an address you are authorized to test. Run `cargo run -- --help` to see the command syntax without scanning.
+The `--` passes the remaining arguments to `rust-nmap`. This command starts a real scan, so use only a target you are authorized to test. To see the syntax without scanning, run `cargo run -- --help`.
 
-At startup, the executable displays a crab, its name in large letters, its version, and a one-line description.
-
-If your shell says `cargo: command not found` after installing Rust, load Cargo's shell environment or open a new terminal:
+Build and run the release executable directly:
 
 ```bash
-. "$HOME/.cargo/env"
-```
-
-To build a release executable and run it directly:
-
-```bash
-cargo build --release
+cargo build --release --locked
 ./target/release/rust-nmap --target 127.0.0.1 --ports 22,80,8080 --timeout-ms 1000
 ```
 
-To install the executable named `rust-nmap`:
+Or install it as `rust-nmap`:
 
 ```bash
 cargo install --path . --locked
 rust-nmap --target 127.0.0.1 --ports 22,80,8080 --timeout-ms 1000
 ```
 
-Cargo's binary installation directory, usually `~/.cargo/bin`, must be on `PATH` to invoke the installed command by name.
+Cargo installs binaries in a directory usually named `~/.cargo/bin`. That directory must be on `PATH` to run the installed command by name. If `cargo` itself is not found after installing Rust, open a new terminal or load Cargo's shell environment with `. "$HOME/.cargo/env"`. Reinstall after changing the source if you use the installed binary; `cargo build` does not replace it.
 
-## Command input
+Rig is pinned to version 0.42.0, and `Cargo.lock` records the resolved dependencies.
+
+### CLI options
 
 | Option | Meaning |
 | --- | --- |
-| `--target IPV4` | IPv4 address to scan |
-| `--ports PORT[,PORT...]` | Comma-separated TCP ports in the range 1–65535 |
-| `--timeout-ms MILLISECONDS` | Positive timeout for each connection attempt and its subsequent banner read or HTTP probe |
-| `--help` or `-h` | Show the command syntax |
+| `--target IPV4` | IPv4 address to scan; hostnames and IPv6 are not accepted |
+| `--ports PORT[,PORT...]` | TCP ports from 1 through 65535, scanned sequentially in the given order |
+| `--timeout-ms MILLISECONDS` | Positive timeout for a connection attempt and the later banner read or HTTP probe |
+| `--ai` | Request DeepSeek interpretation after the scan report |
+| `--help`, `-h` | Show command syntax without scanning |
 
-All three scan options are required. Invalid or missing values produce an error before any connection attempt. Ports are scanned sequentially in the order provided. The executable does not accept hostnames, IPv6 addresses, or an `--ai` option.
+The target, ports, and timeout options are required for a scan. Invalid input stops the run before any connection attempt.
 
-## Results and interpretation
+## Understanding scan results
 
-Each attempted connection produces a `ScanResult` with the port, a `PortStatus`, an optional identified service, elapsed connection time, any connection error, and any read observation. The report prints one row per port with the status, service, connection time in milliseconds, and detail. The displayed status means:
+Each report row includes the port, connection state, an optional service label, the TCP connection time, and a detail. The connection time measures the initial TCP attempt; it does not include the later banner read or HTTP probe.
 
-- **open:** the TCP connection succeeded. It does not identify the service or prove a vulnerability.
-- **closed:** the connection was refused.
-- **filtered:** a tentative label for a connection timeout. One timeout does not prove filtering or that the host is offline.
-- **undetermined:** another connection error prevented classification.
-
-After a successful connection on port 80, the scanner makes a separate HTTP `HEAD` request. A valid HTTP response sets the service to `http`; the detail shows its `Server` header when present. Other open ports receive a passive banner read of up to 512 bytes. A complete SSH identification line sets the service to `ssh`; the detail shows a printable, escaped preview of at most 64 bytes. The report does not show HTTP status codes or received byte counts. A failed HTTP probe or banner read does not change an already successful TCP connection into a closed port. The reported elapsed time measures the initial connection attempt, not the later probe or read.
-
-## Design
-
-CLI input is validated before scanning. The scanner returns structured measurements; reporting displays them. The intended optional AI service would receive completed results only when explicitly enabled and return a separate interpretation. An AI failure must never discard or hide measured results. AI conclusions should distinguish observations from hypotheses, and any target responses or banners must be treated as untrusted data.
-
-| Path | Responsibility |
+| State | What it means here |
 | --- | --- |
-| `src/main.rs` | Parse CLI input and coordinate scanning and reporting |
-| `src/model.rs` | Scan result and port status types |
-| `src/scanner.rs` | Sequential TCP connection attempts and outcome classification |
-| `src/http.rs` | HTTP `HEAD` probe for open port 80 |
-| `src/report.rs` | Display measured results |
-| `src/config.rs` | Scan configuration module |
-| `src/ai/` | Separate AI settings and service modules |
+| `open` | The TCP connection succeeded. This alone does not identify a service or prove a vulnerability. |
+| `closed` | The connection was refused. |
+| `filtered` | The connection timed out. Filtering is a tentative explanation, not a confirmed fact. |
+| `undetermined` | Another connection error prevented classification. |
 
-See [architecture](docs/architecture.md) and [AI integration](docs/ai-integration.md) for the design in more detail.
+For most open ports, the scanner passively reads up to 512 bytes, stopping at a newline, a read timeout, a closed connection, or the byte limit. The report shows a printable preview of at most 64 bytes. A complete SSH identification line gives the port an `ssh` service label. Other banners remain observations even when the service is unknown.
 
-## AI configuration
+For open port 80, the scanner makes an HTTP `HEAD` request. A valid HTTP response gives the port an `http` label; the report shows the `Server` header when present. The HTTP probe does not follow redirects or use a configured proxy. It does not display HTTP status codes. A failed probe or banner read does not change a successful TCP connection into a closed result.
 
-[`.env.example`](.env.example) documents the intended provider settings:
+Service labels are deliberately limited. A program can run on an unexpected port, and a banner or `Server` header can be missing, misleading, or customized. The scanner does not verify a product version beyond the bytes it observed.
+
+## Optional AI interpretation
+
+Add `--ai` to ask DeepSeek to explain the completed scan:
+
+```bash
+cargo run -- --target 127.0.0.1 --ports 22,80,8080 --timeout-ms 1000 --ai
+```
+
+AI is off by default. When enabled, the application sends at most eight open-port observations and up to five matching local CVE advisory entries to the configured DeepSeek API. The request has bounded text and output, and asks the model to distinguish observations from hypotheses. Target banners and advisory text are treated as untrusted data. The generated interpretation appears separately from measured results and from the retrieved advisory candidates.
+
+CVE matching uses a local UTF-8 tab-separated file supplied by you. Each line has five fields, separated by tabs:
+
+```text
+CVE-ID<TAB>product<TAB>exact-version<TAB>https://source-url<TAB>description
+```
+
+The reader ignores lines beginning with `#`, accepts a file up to 1 MiB, and selects at most five records whose `product/version` or `product_version` text appears in an open port's observation. For example, an observation containing `Apache/2.4.68` can match an entry for product `Apache` and version `2.4.68`. There is no automatic advisory download, web search, or vector database. If no file or no matching entry is provided, the AI prompt says that no CVE lookup evidence is available and forbids invented CVE IDs.
+
+A matching version string is only a lead. Distribution packages can backport fixes without changing the advertised version, and a banner does not prove the exact software behind a port. Verify any CVE against the authoritative advisory, the installed package, and the vendor's fix information before treating it as applicable.
+
+### AI configuration
+
+Copy [`.env.example`](.env.example) to a local `.env` in the directory where you run `rust-nmap`, or export the same names in your shell. The application reads `.env` only when `--ai` is used. Exported environment variables take precedence over values in the file. `.env` and other local `.env.*` files are Git-ignored; `.env.example` is tracked.
 
 | Variable | Meaning |
 | --- | --- |
-| `RUST_NMAP_AI_BASE_URL` | AI API server address |
-| `RUST_NMAP_AI_API_KEY` | Authentication credential when the provider requires one |
-| `RUST_NMAP_AI_MODEL` | Chosen model identifier |
-| `RUST_NMAP_AI_TIMEOUT_MS` | Maximum AI request duration in milliseconds |
+| `RUST_NMAP_AI_BASE_URL` | Optional DeepSeek API base URL; blank uses Rig's default endpoint |
+| `RUST_NMAP_AI_API_KEY` | Required DeepSeek API key |
+| `RUST_NMAP_AI_MODEL` | Required model identifier, such as `deepseek-flash` |
+| `RUST_NMAP_AI_TIMEOUT_MS` | Maximum AI request duration in milliseconds; defaults to `15000` |
+| `RUST_NMAP_CVE_FILE` | Optional path to your local advisory TSV file |
 
-AI is not called by the executable. `.env.example` is a template; `.env` files are not loaded automatically. Keep credentials out of source control, logs, and reports. Scan results should be sent to a configured provider only after the user explicitly requests AI interpretation.
+The AI request uses DeepSeek's non-thinking mode to produce a short final answer. The application does not print the API key or provider response body. If configuration, retrieval, or the request fails, it reports the AI error after the measured scan results. Keep credentials out of commits, logs, reports, and shared terminal output.
+
+## Repository layout
+
+```text
+src/
+├── main.rs             Entry point and orchestration
+├── cli/
+│   ├── mod.rs          Argument parsing and validation
+│   └── config.rs       Reserved for a typed scan configuration
+├── scan/
+│   ├── mod.rs          TCP connections, outcomes, and passive banners
+│   └── http.rs         HTTP HEAD probe for open port 80
+├── model/
+│   ├── mod.rs          Scan and AI result types
+│   └── report.rs       Terminal rendering of results and interpretation
+└── ai/
+    ├── mod.rs          AI modules
+    ├── config.rs       DeepSeek settings and local .env loading
+    ├── retrieval.rs    Local CVE advisory matching
+    └── service.rs      Bounded prompt and Rig request
+
+tests/
+├── scan/               Scanner and HTTP unit tests
+└── ai/                 Configuration, retrieval, and service unit tests
+```
+
+The tests are in separate files under `tests/`, but each source module includes its tests only in a test build. This keeps private helper functions private while making the test files easy to find. See [architecture](docs/architecture.md) and [AI integration](docs/ai-integration.md) for more detail.
+
+## Local checks
+
+The following commands format, test, lint, and build without making a live scan or DeepSeek request:
+
+```bash
+cargo fmt --check
+cargo test --locked
+cargo clippy --locked -- -D warnings
+cargo build --release --locked
+```
