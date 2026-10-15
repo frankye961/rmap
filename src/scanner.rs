@@ -25,12 +25,13 @@ pub fn scan(address: String, timeout: Duration, ports: &[&str]) -> Vec<ScanResul
 
         let result = match connection {
             Ok(stream) => {
-                handle_connection(stream, target.port(), timeout);
+                let observation = handle_connection(stream, timeout);
                 ScanResult {
                     port: target.port(),
                     status: PortStatus::Open,
                     elapsed,
                     error: None,
+                    observation: Some(observation),
                 }
             }
             Err(error) => {
@@ -44,6 +45,7 @@ pub fn scan(address: String, timeout: Duration, ports: &[&str]) -> Vec<ScanResul
                     status,
                     elapsed,
                     error: Some(error.to_string()),
+                    observation: None,
                 }
             }
         };
@@ -53,21 +55,30 @@ pub fn scan(address: String, timeout: Duration, ports: &[&str]) -> Vec<ScanResul
     results
 }
 
-fn handle_connection(mut stream: TcpStream, port: u16, timeout: Duration) {
+fn handle_connection(mut stream: TcpStream, timeout: Duration) -> String {
     if let Err(error) = stream.set_read_timeout(Some(timeout)) {
-        eprintln!("Could not set a read timeout for port {port}: {error}");
-        return;
+        return format!("could not set read timeout: {error}");
     }
 
     let mut buffer = [0; 512];
     match stream.read(&mut buffer) {
-        Ok(0) => println!("Port {port}: connection closed by peer"),
+        Ok(0) => "peer closed without sending data".to_string(),
         Ok(bytes_read) => {
-            println!("Received {bytes_read} bytes: {:?}", &buffer[..bytes_read]);
+            let preview_len = bytes_read.min(64);
+            let preview: String = buffer[..preview_len]
+                .iter()
+                .flat_map(|byte| std::ascii::escape_default(*byte))
+                .map(char::from)
+                .collect();
+            if bytes_read > preview_len {
+                format!("{bytes_read} bytes: \"{preview}\" (first {preview_len} shown)")
+            } else {
+                format!("{bytes_read} bytes: \"{preview}\"")
+            }
         }
         Err(error) if matches!(error.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock) => {
-            println!("Port {port}: no data received before the read timeout");
+            "no data before read timeout".to_string()
         }
-        Err(error) => eprintln!("Could not read from port {port}: {error}"),
+        Err(error) => format!("read error: {error}"),
     }
 }

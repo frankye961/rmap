@@ -8,6 +8,7 @@ pub struct ScanResult {
     pub status: PortStatus,
     pub elapsed: Duration,
     pub error: Option<String>,
+    pub observation: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
