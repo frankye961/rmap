@@ -1,5 +1,7 @@
 # Architecture
 
+The project aims to grow into a network scanner inspired by Nmap, written in Rust and extended with optional AI help for interpreting observed services and possible CVE leads. The modules below describe the current TCP connect implementation and keep room for broader scanning capabilities.
+
 CLI input becomes a validated scan configuration. The scanner consumes that configuration and produces structured results. Reporting displays the measured results. When explicitly requested, the AI service receives completed scan results and returns a separate interpretation for reporting. AI connection configuration remains separate from scan configuration.
 
 The types are described here in prose. `PortStatus`, `ScanResult`, `AiConfig`, and `AiAnalysis` are implemented; `ScanConfig` remains planned:

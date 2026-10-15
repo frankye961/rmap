@@ -1,8 +1,8 @@
 # rust-nmap
 
-`rust-nmap` is a Rust learning project that scans selected TCP ports with ordinary TCP connections. It records what happened on each connection, tries a small amount of service identification, and prints a readable terminal report. An optional DeepSeek step can interpret the completed results and relate observed service versions to entries in a local CVE advisory file.
+`rust-nmap` aims to be a network scanner inspired by Nmap, written in Rust and extended with AI interpretation. Its goal is to find and describe exposed services, then help a user understand what observed service versions might mean, including possible CVE leads. Scan measurements and AI conclusions stay separate so the tool can show what it observed without presenting a model's guess as a fact.
 
-The project is intentionally narrower than Nmap. It scans one IPv4 address and the ports you list, in order. It does not perform host discovery, raw packet scanning, concurrent scans, broad service fingerprinting, or live CVE database searches. Its main learning topics are Rust's networking and I/O APIs, timeouts, error classification, module boundaries, and the difference between measurements and interpretations.
+The current implementation is a starting point for that aim: it scans selected TCP ports on one IPv4 address, collects limited banners, probes HTTP on port 80, and can ask DeepSeek to interpret the results using a local CVE advisory file. It does not yet offer Nmap's range of scan methods, host discovery, concurrent scanning, broad service fingerprinting, or live CVE database searches. Building it is also a way to learn Rust networking, I/O, timeouts, and error handling.
 
 ## How a run works
 
