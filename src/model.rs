@@ -6,6 +6,7 @@ use std::time::Duration;
 pub struct ScanResult {
     pub port: u16,
     pub status: PortStatus,
+    pub service: Option<String>,
     pub elapsed: Duration,
     pub error: Option<String>,
     pub observation: Option<String>,
