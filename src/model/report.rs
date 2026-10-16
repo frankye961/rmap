@@ -32,14 +32,21 @@ pub fn print_results(target: &str, results: &[ScanResult]) {
 
 pub fn print_ai_analysis(analysis: &AiAnalysis) {
     println!("\n╭─ AI INTERPRETATION {}", "─".repeat(55));
-    for line in analysis.interpretation.lines().take(20) {
+    for line in analysis.interpretation.lines().take(60) {
         print_wrapped(line);
     }
     println!("│");
-    println!("│  LOCAL CVE ADVISORY CANDIDATES");
-    if analysis.candidates.is_empty() {
-        println!("│  No exact-version advisory match was supplied.");
-    } else {
+    println!("│  WEB RESEARCH");
+    for note in &analysis.research_notes {
+        print_wrapped(note);
+    }
+    for source in &analysis.web_sources {
+        print_wrapped(&source.title);
+        print_wrapped(&format!("Source: {}", source.url));
+        println!("│");
+    }
+    if !analysis.candidates.is_empty() {
+        println!("│  OPTIONAL LOCAL ADVISORY CANDIDATES");
         for candidate in &analysis.candidates {
             print_wrapped(&format!(
                 "{}  {}/{}  {} {}",
@@ -62,7 +69,7 @@ fn print_wrapped(text: &str) {
     let clean: String = text
         .chars()
         .filter(|ch| !ch.is_control())
-        .take(400)
+        .take(700)
         .collect();
     let mut line = String::from("│  ");
     for word in clean.split_whitespace() {
