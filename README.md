@@ -108,15 +108,13 @@ Copy [`.env.example`](.env.example) to a local `.env` in the directory where you
 
 | Variable | Meaning |
 | --- | --- |
-| `RMAP_AI_BASE_URL` | Optional DeepSeek API base URL; blank uses Rig's default endpoint |
-| `RMAP_AI_API_KEY` | Required DeepSeek API key |
+| `RMAP_AI_BASE_URL` | Optional AI model API base URL; blank uses Rig's default endpoint |
+| `RMAP_AI_API_KEY` | Required AI API key |
 | `RMAP_AI_MODEL` | Required model identifier chosen by the user |
 | `RMAP_AI_TIMEOUT_MS` | Maximum AI request duration in milliseconds; defaults to `15000` |
 | `RMAP_CVE_FILE` | Optional path to your local advisory TSV file |
 
 Existing `RUST_NMAP_*` variables remain accepted as compatibility aliases. Nonempty exported values take precedence over file values; within each source, `RMAP_*` takes precedence over its legacy alias. Your existing local `.env` can keep its previous variable names.
-
-The AI request uses DeepSeek's non-thinking mode to produce a short final answer. The application does not print the API key or provider response body. If configuration, retrieval, or the request fails, it reports the AI error after the measured scan results. Keep credentials out of commits, logs, reports, and shared terminal output.
 
 ## Repository layout
 
