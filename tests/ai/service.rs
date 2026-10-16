@@ -43,3 +43,26 @@ fn udp_observations_keep_their_transport() {
     assert!(prompt.contains("53/udp"));
     assert!(!prompt.contains("53/tcp"));
 }
+
+#[test]
+fn closed_and_uncertain_ports_are_still_measured_observations() {
+    use crate::model::{PortStatus, ScanMode, ScanResult};
+    use std::time::Duration;
+
+    let results: Vec<_> = [(80, PortStatus::Closed), (21, PortStatus::OpenOrFiltered)]
+        .into_iter()
+        .map(|(port, status)| ScanResult {
+            port,
+            transport: ScanMode::Udp,
+            status,
+            service: None,
+            elapsed: Duration::from_secs(1),
+            error: None,
+            observation: Some("probe outcome".into()),
+        })
+        .collect();
+    let prompt = super::build_prompt(&results, &[]);
+    assert!(prompt.contains("80/udp: state Closed"));
+    assert!(prompt.contains("21/udp: state OpenOrFiltered"));
+    assert!(!prompt.contains("Do not name any CVE"));
+}

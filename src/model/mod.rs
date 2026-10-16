@@ -45,6 +45,16 @@ pub enum PortStatus {
 pub struct AiAnalysis {
     pub interpretation: String,
     pub candidates: Vec<CveCandidate>,
+    pub web_sources: Vec<WebSource>,
+    pub research_notes: Vec<String>,
+}
+
+/// A public search result actually returned during AI research, not an AI-invented link.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct WebSource {
+    pub title: String,
+    pub url: String,
+    pub snippet: String,
 }
 
 /// Advisory matched to a measured service and version in the local corpus.

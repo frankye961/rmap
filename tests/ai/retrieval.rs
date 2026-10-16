@@ -25,3 +25,23 @@ fn retrieves_only_observed_exact_version() {
     assert_eq!(candidates.len(), 1);
     assert_eq!(candidates[0].id, "CVE-2024-12345");
 }
+
+#[test]
+fn matches_space_separated_ftp_banner_without_version_prefix_false_positive() {
+    let result = ScanResult {
+        port: 21,
+        transport: ScanMode::Tcp,
+        status: PortStatus::Open,
+        service: None,
+        elapsed: Duration::ZERO,
+        error: None,
+        observation: Some("220 (vsFTPd 3.0.5)".into()),
+    };
+    let text = concat!(
+        "CVE-2025-14242\tvsftpd\t3.0.5\thttps://security-tracker.debian.org/tracker/CVE-2025-14242\tDistribution-specific patch; applicability requires verification\n",
+        "CVE-2025-12345\tvsftpd\t3.0\thttps://example.test\tFixture version prefix\n",
+    );
+    let candidates = retrieve_from_text(text, &[result]);
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].id, "CVE-2025-14242");
+}

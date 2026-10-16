@@ -1,4 +1,4 @@
-//! Settings for explicitly requested DeepSeek analysis and local CVE retrieval.
+//! Settings for explicitly requested DeepSeek analysis and public web search.
 
 use std::env;
 use std::fs;
@@ -12,6 +12,7 @@ pub struct AiConfig {
     pub model: String,
     pub timeout: Duration,
     pub cve_file: Option<PathBuf>,
+    pub search_api_key: Option<String>,
 }
 
 impl AiConfig {
@@ -43,7 +44,7 @@ impl AiConfig {
             return Err("RMAP_AI_BASE_URL must start with http:// or https://".into());
         }
         let timeout_ms = setting("RMAP_AI_TIMEOUT_MS")
-            .unwrap_or_else(|| "15000".into())
+            .unwrap_or_else(|| "60000".into())
             .parse::<u64>()
             .map_err(|_| "RMAP_AI_TIMEOUT_MS must be a positive integer")?;
         if timeout_ms == 0 {
@@ -58,6 +59,7 @@ impl AiConfig {
             model,
             timeout: Duration::from_millis(timeout_ms),
             cve_file,
+            search_api_key: setting("RMAP_SEARCH_API_KEY"),
         })
     }
 }

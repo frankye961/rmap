@@ -48,6 +48,7 @@ fn retrieve_from_text(text: &str, results: &[ScanResult]) -> Vec<CveCandidate> {
         }
         let slash = format!("{product}/{version}").to_ascii_lowercase();
         let underscore = format!("{product}_{version}").to_ascii_lowercase();
+        let space = format!("{product} {version}").to_ascii_lowercase();
         for result in results
             .iter()
             .filter(|result| result.status == PortStatus::Open)
@@ -59,6 +60,7 @@ fn retrieve_from_text(text: &str, results: &[ScanResult]) -> Vec<CveCandidate> {
                 .to_ascii_lowercase();
             if contains_exact_version(&observation, &slash)
                 || contains_exact_version(&observation, &underscore)
+                || contains_exact_version(&observation, &space)
             {
                 if candidates.iter().any(|candidate: &CveCandidate| {
                     candidate.id == id

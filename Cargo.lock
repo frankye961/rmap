@@ -5332,6 +5332,7 @@ version = "0.2.0"
 dependencies = [
  "reqwest 0.13.5",
  "rig",
+ "serde",
  "serde_json",
  "tokio",
 ]
