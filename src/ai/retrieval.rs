@@ -61,13 +61,16 @@ fn retrieve_from_text(text: &str, results: &[ScanResult]) -> Vec<CveCandidate> {
                 || contains_exact_version(&observation, &underscore)
             {
                 if candidates.iter().any(|candidate: &CveCandidate| {
-                    candidate.id == id && candidate.port == result.port
+                    candidate.id == id
+                        && candidate.port == result.port
+                        && candidate.transport == result.transport
                 }) {
                     continue;
                 }
                 candidates.push(CveCandidate {
                     id: id.to_string(),
                     port: result.port,
+                    transport: result.transport,
                     product: product.to_string(),
                     version: version.to_string(),
                     description: description.chars().take(240).collect(),

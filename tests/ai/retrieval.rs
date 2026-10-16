@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crate::model::{PortStatus, ScanResult};
+use crate::model::{PortStatus, ScanMode, ScanResult};
 
 use super::retrieve_from_text;
 
@@ -8,6 +8,7 @@ use super::retrieve_from_text;
 fn retrieves_only_observed_exact_version() {
     let results = vec![ScanResult {
         port: 80,
+        transport: ScanMode::Tcp,
         status: PortStatus::Open,
         service: Some("http".into()),
         elapsed: Duration::ZERO,

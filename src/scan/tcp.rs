@@ -6,7 +6,7 @@ use std::net::{SocketAddr, TcpStream};
 use std::time::{Duration, Instant};
 
 use super::http;
-use crate::model::{PortStatus, ScanResult};
+use crate::model::{PortStatus, ScanMode, ScanResult};
 
 pub fn scan(address: String, timeout: Duration, ports: &[&str]) -> Vec<ScanResult> {
     let mut results = Vec::new();
@@ -38,6 +38,7 @@ pub fn scan(address: String, timeout: Duration, ports: &[&str]) -> Vec<ScanResul
                 };
                 ScanResult {
                     port: target.port(),
+                    transport: ScanMode::Tcp,
                     status: PortStatus::Open,
                     service,
                     elapsed,
@@ -53,6 +54,7 @@ pub fn scan(address: String, timeout: Duration, ports: &[&str]) -> Vec<ScanResul
                 };
                 ScanResult {
                     port: target.port(),
+                    transport: ScanMode::Tcp,
                     status,
                     service: None,
                     elapsed,

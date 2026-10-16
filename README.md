@@ -2,12 +2,12 @@
 
 `rmap` aims to be a network scanner inspired by Nmap, written in Rust and extended with AI interpretation. Its goal is to find and describe exposed services, then help a user understand what observed service versions might mean, including possible CVE leads. Scan measurements and AI conclusions stay separate so the tool can show what it observed without presenting a model's guess as a fact.
 
-The current implementation is a starting point for that aim: it scans selected TCP ports on one IPv4 address, collects limited banners, probes HTTP on port 80, and can ask DeepSeek to interpret the results using a local CVE advisory file. It does not yet offer Nmap's range of scan methods, host discovery, concurrent scanning, broad service fingerprinting, or live CVE database searches. Building it is also a way to learn Rust networking, I/O, timeouts, and error handling.
+The current implementation scans selected TCP or UDP ports on one IPv4 address, collects limited banners, probes HTTP on port 80, and can ask DeepSeek to interpret the results using a local CVE advisory file. It does not yet offer Nmap's range of scan methods, host discovery, concurrent scanning, broad service fingerprinting, or live CVE database searches. Building it is also a way to learn Rust networking, I/O, timeouts, and error handling.
 
 ## How a run works
 
 1. The CLI validates an IPv4 target, a scan mode (`--tcp` or `--udp`), a comma-separated list of ports, and a positive timeout.
-2. The common scanner entry point dispatches to the selected transport. UDP is reserved for future implementation and currently returns an error without sending packets. For each TCP port, the scanner attempts a TCP connection and records its elapsed connection time and outcome in a `ScanResult`.
+2. The common scanner entry point dispatches to the selected transport. UDP sends an empty datagram to each selected port and waits for a response. For each TCP port, the scanner attempts a TCP connection and records its elapsed connection time and outcome in a `ScanResult`.
 3. On an open port other than 80, it reads a passive banner. On open port 80, it sends an HTTP `HEAD` probe using a separate connection.
 4. The report prints the measured results before any optional AI work.
 5. With `--ai`, the program loads AI settings, retrieves matching entries from an optional local advisory file, and sends bounded observations to DeepSeek through Rig. It prints the interpretation in a separate section. AI errors leave the scan report visible.
@@ -47,7 +47,7 @@ Rig is pinned to version 0.42.0, and `Cargo.lock` records the resolved dependenc
 | Option | Meaning |
 | --- | --- |
 | `--tcp` | Run the TCP connect scanner |
-| `--udp` | Select the future UDP scanner; currently exits with a not implemented error |
+| `--udp` | Send an empty UDP probe to each selected port and wait for a response |
 | `--target IPV4` | IPv4 address to scan; hostnames and IPv6 are not accepted |
 | `--ports PORT[,PORT...]` | Ports from 1 through 65535, scanned sequentially in the given order |
 | `--timeout-ms MILLISECONDS` | Positive timeout for a connection attempt and the later banner read or HTTP probe |
@@ -56,7 +56,7 @@ Rig is pinned to version 0.42.0, and `Cargo.lock` records the resolved dependenc
 
 Exactly one of `--tcp` or `--udp` is required, together with the target, ports, and timeout options. The modes cannot be combined. Invalid input stops the run before any connection attempt.
 
-The UDP entry point is ready for implementation. This command currently exits with `UDP scanning is not implemented yet`:
+To scan UDP ports:
 
 ```bash
 rmap --udp --target 127.0.0.1 --ports 53 --timeout-ms 1000
@@ -64,20 +64,23 @@ rmap --udp --target 127.0.0.1 --ports 53 --timeout-ms 1000
 
 ## Understanding scan results
 
-Each report row includes the port, connection state, an optional service label, the TCP connection time, and a detail. The connection time measures the initial TCP attempt; it does not include the later banner read or HTTP probe.
+Each report row includes the port, connection state, an optional service label, the elapsed time, and a detail. For TCP, elapsed time measures the initial connection attempt and excludes later banner reads or HTTP probes. For UDP, it measures socket setup, sending, and waiting for a response.
 
 | State | What it means here |
 | --- | --- |
-| `open` | The TCP connection succeeded. This alone does not identify a service or prove a vulnerability. |
-| `closed` | The connection was refused. |
+| `open` | The TCP connection succeeded or a UDP response was received. This alone does not identify a service or prove a vulnerability. |
+| `closed` | The TCP connection was refused, or the OS reported a refused UDP probe. |
 | `filtered` | The connection timed out. Filtering is a tentative explanation, not a confirmed fact. |
-| `undetermined` | Another connection error prevented classification. |
+| `open\|filtered` | No UDP response arrived before the read timeout; an open service may silently ignore the probe. |
+| `undetermined` | Another socket or I/O error prevented classification. |
 
 For most open ports, the scanner passively reads up to 512 bytes, stopping at a newline, a read timeout, a closed connection, or the byte limit. The report shows a printable preview of at most 64 bytes. A complete SSH identification line gives the port an `ssh` service label. Other banners remain observations even when the service is unknown.
 
 For open port 80, the scanner makes an HTTP `HEAD` request. A valid HTTP response gives the port an `http` label; the report shows the `Server` header when present. The HTTP probe does not follow redirects or use a configured proxy. It does not display HTTP status codes. A failed probe or banner read does not change a successful TCP connection into a closed result.
 
 Service labels are deliberately limited. A program can run on an unexpected port, and a banner or `Server` header can be missing, misleading, or customized. The scanner does not verify a product version beyond the bytes it observed.
+
+UDP uses a fresh local socket for each port and restricts responses to that target's IP and port. Empty probes are deliberately simple: many UDP services require a valid protocol request and will ignore them. Service identification and protocol-specific UDP probes are not implemented. Closed-port errors depend on what the operating system exposes; silence is never treated as proof of an open or closed port. Response previews escape control bytes and are limited to 64 bytes; datagrams are read into a 1024-byte buffer and may be truncated.
 
 ## Optional AI interpretation
 
@@ -126,7 +129,7 @@ src/
 ├── scan/
 │   ├── mod.rs          Common entry point and transport dispatch
 │   ├── tcp.rs          TCP connections, outcomes, and passive banners
-│   ├── udp.rs          Future UDP scanner entry point
+│   ├── udp.rs          Sequential UDP probes and outcome classification
 │   └── http.rs         HTTP HEAD probe for open port 80
 ├── model/
 │   ├── mod.rs          Scan and AI result types
@@ -139,7 +142,8 @@ src/
 
 tests/
 ├── cli/                Scan mode and argument validation tests
-├── scan/               TCP scanner and HTTP unit tests
+├── scan/               TCP, UDP classification, and HTTP unit tests
+├── model/              Report formatting tests
 └── ai/                 Configuration, retrieval, and service unit tests
 ```
 

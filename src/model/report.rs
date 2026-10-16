@@ -5,30 +5,13 @@ use crate::model::{AiAnalysis, PortStatus, ScanResult};
 pub fn print_results(target: &str, results: &[ScanResult]) {
     println!("Scan results for {target}\n");
     println!(
-        "{:<9} {:<12} {:<9} {:>11}  DETAIL",
-        "PORT", "STATE", "SERVICE", "CONNECT"
+        "{:<9} {:<14} {:<9} {:>11}  DETAIL",
+        "PORT", "STATE", "SERVICE", "ELAPSED"
     );
     println!("{}", "-".repeat(82));
 
     for result in results {
-        let status = match result.status {
-            PortStatus::Open => "open",
-            PortStatus::Closed => "closed",
-            PortStatus::Filtered => "filtered",
-            PortStatus::Unknown => "undetermined",
-        };
-        let detail = result
-            .error
-            .as_deref()
-            .or(result.observation.as_deref())
-            .unwrap_or("-");
-        println!(
-            "{:<9} {:<12} {:<9} {:>8.2} ms  {detail}",
-            format!("{}/tcp", result.port),
-            status,
-            result.service.as_deref().unwrap_or("-"),
-            result.elapsed.as_secs_f64() * 1_000.0
-        );
+        println!("{}", format_result(result));
     }
 
     if results
@@ -36,6 +19,14 @@ pub fn print_results(target: &str, results: &[ScanResult]) {
         .any(|result| result.status == PortStatus::Filtered)
     {
         println!("\nfiltered = connection timed out; filtering is unconfirmed.");
+    }
+    if results
+        .iter()
+        .any(|result| result.status == PortStatus::OpenOrFiltered)
+    {
+        println!(
+            "\nopen|filtered = no UDP response before timeout; the port may be open or filtered."
+        );
     }
 }
 
@@ -51,8 +42,12 @@ pub fn print_ai_analysis(analysis: &AiAnalysis) {
     } else {
         for candidate in &analysis.candidates {
             print_wrapped(&format!(
-                "{}  {}/tcp  {} {}",
-                candidate.id, candidate.port, candidate.product, candidate.version
+                "{}  {}/{}  {} {}",
+                candidate.id,
+                candidate.port,
+                candidate.transport.as_str(),
+                candidate.product,
+                candidate.version
             ));
             print_wrapped(&candidate.description);
             print_wrapped(&format!("Source: {}", candidate.source));
@@ -82,3 +77,29 @@ fn print_wrapped(text: &str) {
     }
     println!("{line}");
 }
+
+fn format_result(result: &ScanResult) -> String {
+    let status = match result.status {
+        PortStatus::Open => "open",
+        PortStatus::Closed => "closed",
+        PortStatus::Filtered => "filtered",
+        PortStatus::OpenOrFiltered => "open|filtered",
+        PortStatus::Unknown => "undetermined",
+    };
+    let detail = result
+        .error
+        .as_deref()
+        .or(result.observation.as_deref())
+        .unwrap_or("-");
+    format!(
+        "{:<9} {:<14} {:<9} {:>8.2} ms  {detail}",
+        format!("{}/{}", result.port, result.transport.as_str()),
+        status,
+        result.service.as_deref().unwrap_or("-"),
+        result.elapsed.as_secs_f64() * 1_000.0
+    )
+}
+
+#[cfg(test)]
+#[path = "../../tests/model/report.rs"]
+mod tests;
