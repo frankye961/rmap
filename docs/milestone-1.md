@@ -1,6 +1,6 @@
 # Milestone 1: sequential TCP connect scanning
 
-Implement a basic scan one step at a time. Functional AI integration, concurrency, and host discovery belong to later milestones; their scaffolding does not mean they work today.
+This is the original learning checklist for building sequential TCP scanning. Its unchecked tasks are retained as learning exercises rather than a current feature-status report. The implementation now includes TCP scanning, basic UDP probing, banner collection, and optional AI web research. See [architecture](architecture.md) and [usage](usage.md) for current behavior. Concurrency and host discovery remain future work.
 
 - [ ] **1. Scan one port.** Goal: attempt a TCP connection to one explicitly chosen target and port. Learn `std::net::TcpStream`, address handling, timeouts, and `Result`. Completion: an authorized local test can distinguish a successful connection from an unsuccessful attempt without a panic.
 - [ ] **2. Define custom result types and classify outcomes.** Goal: represent the attempt and its outcome without losing useful error information. Learn structs, enums, pattern matching, and ownership. Completion: each attempt yields a structured result whose reported status agrees with the observed connection outcome; ambiguous errors remain appropriately uncertain.
