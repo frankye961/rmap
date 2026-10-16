@@ -82,6 +82,46 @@ Service labels are deliberately limited. A program can run on an unexpected port
 
 UDP uses a fresh local socket for each port and restricts responses to that target's IP and port. Empty probes are deliberately simple: many UDP services require a valid protocol request and will ignore them. Service identification and protocol-specific UDP probes are not implemented. Closed-port errors depend on what the operating system exposes; silence is never treated as proof of an open or closed port. Response previews escape control bytes and are limited to 64 bytes; datagrams are read into a 1024-byte buffer and may be truncated.
 
+### Example UDP run with AI
+
+This recorded example uses `192.0.2.21` as an anonymized documentation address. Replace it with your own authorized target when running the command. Timings and AI wording vary between runs.
+
+```bash
+rmap --udp --target 192.0.2.21 --ports 80,22,21,8080,443 --timeout-ms 1000 --ai
+```
+
+Console output excerpt:
+
+```text
+Scan results for 192.0.2.21
+
+PORT      STATE          SERVICE       ELAPSED  DETAIL
+----------------------------------------------------------------------------------
+80/udp    closed         -           107.56 ms  Connection refused (os error 111)
+22/udp    closed         -             3.93 ms  Connection refused (os error 111)
+21/udp    open|filtered  -          1062.15 ms  no UDP response before read timeout
+8080/udp  open|filtered  -          1023.85 ms  no UDP response before read timeout
+443/udp   open|filtered  -          1024.90 ms  no UDP response before read timeout
+
+open|filtered = no UDP response before timeout; the port may be open or filtered.
+
+╭─ AI INTERPRETATION ───────────────────────────────────────────────────────
+│  ## Summary
+│
+│  No scan observations were provided in your message — only a statement
+│  that no advisory candidates were retrieved. I have no measured facts (no
+│  TCP results, no UDP results, no banners, no timeouts) to interpret.
+│
+│  [... AI response excerpt ...]
+│
+│  LOCAL CVE ADVISORY CANDIDATES
+│  No exact-version advisory match was supplied.
+│  Candidate matches require manual verification, including vendor fixes.
+╰────────────────────────────────────────────────────────────────────────────
+```
+
+The AI summary above exposes a current limitation: the prompt includes only results classified as `open`. This run produced only `closed` and `open|filtered` results, so none of its measured port outcomes reached the model. The scan report still contains those measurements; the AI's statement about missing data describes its input, not the scan itself. These observations also provide no service version for CVE matching.
+
 ## Optional AI interpretation
 
 Add `--ai` to ask DeepSeek to explain the completed scan:
