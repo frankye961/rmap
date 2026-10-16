@@ -1,13 +1,13 @@
-# rust-nmap
+# rmap
 
-`rust-nmap` aims to be a network scanner inspired by Nmap, written in Rust and extended with AI interpretation. Its goal is to find and describe exposed services, then help a user understand what observed service versions might mean, including possible CVE leads. Scan measurements and AI conclusions stay separate so the tool can show what it observed without presenting a model's guess as a fact.
+`rmap` aims to be a network scanner inspired by Nmap, written in Rust and extended with AI interpretation. Its goal is to find and describe exposed services, then help a user understand what observed service versions might mean, including possible CVE leads. Scan measurements and AI conclusions stay separate so the tool can show what it observed without presenting a model's guess as a fact.
 
-The current implementation is a starting point for that aim: it scans selected TCP ports on one IPv4 address, collects limited banners, probes HTTP on port 80, and can ask DeepSeek to interpret the results using a local CVE advisory file. It does not yet offer Nmap's range of scan methods, host discovery, concurrent scanning, broad service fingerprinting, or live CVE database searches. Building it is also a way to learn Rust networking, I/O, timeouts, and error handling.
+The current implementation scans selected TCP or UDP ports on one IPv4 address, collects limited banners, probes HTTP on port 80, and can ask DeepSeek to interpret the results using a local CVE advisory file. It does not yet offer Nmap's range of scan methods, host discovery, concurrent scanning, broad service fingerprinting, or live CVE database searches. Building it is also a way to learn Rust networking, I/O, timeouts, and error handling.
 
 ## How a run works
 
-1. The CLI validates an IPv4 target, a comma-separated list of TCP ports, and a positive timeout.
-2. For each port, the scanner attempts a TCP connection and records its elapsed connection time and outcome in a `ScanResult`.
+1. The CLI validates an IPv4 target, a scan mode (`--tcp` or `--udp`), a comma-separated list of ports, and a positive timeout.
+2. The common scanner entry point dispatches to the selected transport. UDP sends an empty datagram to each selected port and waits for a response. For each TCP port, the scanner attempts a TCP connection and records its elapsed connection time and outcome in a `ScanResult`.
 3. On an open port other than 80, it reads a passive banner. On open port 80, it sends an HTTP `HEAD` probe using a separate connection.
 4. The report prints the measured results before any optional AI work.
 5. With `--ai`, the program loads AI settings, retrieves matching entries from an optional local advisory file, and sends bounded observations to DeepSeek through Rig. It prints the interpretation in a separate section. AI errors leave the scan report visible.
@@ -19,23 +19,23 @@ The startup banner shows a crab, the tool name, and the program version.
 Install a stable Rust toolchain with edition 2024 support. From the repository root, run:
 
 ```bash
-cargo run -- --target 127.0.0.1 --ports 22,80,8080 --timeout-ms 1000
+cargo run -- --tcp --target 127.0.0.1 --ports 22,80,8080 --timeout-ms 1000
 ```
 
-The `--` passes the remaining arguments to `rust-nmap`. This command starts a real scan, so use only a target you are authorized to test. To see the syntax without scanning, run `cargo run -- --help`.
+The `--` passes the remaining arguments to `rmap`. This command starts a real scan, so use only a target you are authorized to test. To see the syntax without scanning, run `cargo run -- --help`.
 
 Build and run the release executable directly:
 
 ```bash
 cargo build --release --locked
-./target/release/rust-nmap --target 127.0.0.1 --ports 22,80,8080 --timeout-ms 1000
+./target/release/rmap --tcp --target 127.0.0.1 --ports 22,80,8080 --timeout-ms 1000
 ```
 
-Or install it as `rust-nmap`:
+Or install it as `rmap`:
 
 ```bash
 cargo install --path . --locked
-rust-nmap --target 127.0.0.1 --ports 22,80,8080 --timeout-ms 1000
+rmap --tcp --target 127.0.0.1 --ports 22,80,8080 --timeout-ms 1000
 ```
 
 Cargo installs binaries in a directory usually named `~/.cargo/bin`. That directory must be on `PATH` to run the installed command by name. If `cargo` itself is not found after installing Rust, open a new terminal or load Cargo's shell environment with `. "$HOME/.cargo/env"`. Reinstall after changing the source if you use the installed binary; `cargo build` does not replace it.
@@ -46,24 +46,33 @@ Rig is pinned to version 0.42.0, and `Cargo.lock` records the resolved dependenc
 
 | Option | Meaning |
 | --- | --- |
+| `--tcp` | Run the TCP connect scanner |
+| `--udp` | Send an empty UDP probe to each selected port and wait for a response |
 | `--target IPV4` | IPv4 address to scan; hostnames and IPv6 are not accepted |
-| `--ports PORT[,PORT...]` | TCP ports from 1 through 65535, scanned sequentially in the given order |
+| `--ports PORT[,PORT...]` | Ports from 1 through 65535, scanned sequentially in the given order |
 | `--timeout-ms MILLISECONDS` | Positive timeout for a connection attempt and the later banner read or HTTP probe |
 | `--ai` | Request DeepSeek interpretation after the scan report |
 | `--help`, `-h` | Show command syntax without scanning |
 
-The target, ports, and timeout options are required for a scan. Invalid input stops the run before any connection attempt.
+Exactly one of `--tcp` or `--udp` is required, together with the target, ports, and timeout options. The modes cannot be combined. Invalid input stops the run before any connection attempt.
+
+To scan UDP ports:
+
+```bash
+rmap --udp --target 127.0.0.1 --ports 53 --timeout-ms 1000
+```
 
 ## Understanding scan results
 
-Each report row includes the port, connection state, an optional service label, the TCP connection time, and a detail. The connection time measures the initial TCP attempt; it does not include the later banner read or HTTP probe.
+Each report row includes the port, connection state, an optional service label, the elapsed time, and a detail. For TCP, elapsed time measures the initial connection attempt and excludes later banner reads or HTTP probes. For UDP, it measures socket setup, sending, and waiting for a response.
 
 | State | What it means here |
 | --- | --- |
-| `open` | The TCP connection succeeded. This alone does not identify a service or prove a vulnerability. |
-| `closed` | The connection was refused. |
+| `open` | The TCP connection succeeded or a UDP response was received. This alone does not identify a service or prove a vulnerability. |
+| `closed` | The TCP connection was refused, or the OS reported a refused UDP probe. |
 | `filtered` | The connection timed out. Filtering is a tentative explanation, not a confirmed fact. |
-| `undetermined` | Another connection error prevented classification. |
+| `open\|filtered` | No UDP response arrived before the read timeout; an open service may silently ignore the probe. |
+| `undetermined` | Another socket or I/O error prevented classification. |
 
 For most open ports, the scanner passively reads up to 512 bytes, stopping at a newline, a read timeout, a closed connection, or the byte limit. The report shows a printable preview of at most 64 bytes. A complete SSH identification line gives the port an `ssh` service label. Other banners remain observations even when the service is unknown.
 
@@ -71,12 +80,14 @@ For open port 80, the scanner makes an HTTP `HEAD` request. A valid HTTP respons
 
 Service labels are deliberately limited. A program can run on an unexpected port, and a banner or `Server` header can be missing, misleading, or customized. The scanner does not verify a product version beyond the bytes it observed.
 
+UDP uses a fresh local socket for each port and restricts responses to that target's IP and port. Empty probes are deliberately simple: many UDP services require a valid protocol request and will ignore them. Service identification and protocol-specific UDP probes are not implemented. Closed-port errors depend on what the operating system exposes; silence is never treated as proof of an open or closed port. Response previews escape control bytes and are limited to 64 bytes; datagrams are read into a 1024-byte buffer and may be truncated.
+
 ## Optional AI interpretation
 
 Add `--ai` to ask DeepSeek to explain the completed scan:
 
 ```bash
-cargo run -- --target 127.0.0.1 --ports 22,80,8080 --timeout-ms 1000 --ai
+cargo run -- --tcp --target 127.0.0.1 --ports 22,80,8080 --timeout-ms 1000 --ai
 ```
 
 AI is off by default. When enabled, the application sends at most eight open-port observations and up to five matching local CVE advisory entries to the configured DeepSeek API. The request has bounded text and output, and asks the model to distinguish observations from hypotheses. Target banners and advisory text are treated as untrusted data. The generated interpretation appears separately from measured results and from the retrieved advisory candidates.
@@ -93,15 +104,17 @@ A matching version string is only a lead. Distribution packages can backport fix
 
 ### AI configuration
 
-Copy [`.env.example`](.env.example) to a local `.env` in the directory where you run `rust-nmap`, or export the same names in your shell. The application reads `.env` only when `--ai` is used. Exported environment variables take precedence over values in the file. `.env` and other local `.env.*` files are Git-ignored; `.env.example` is tracked.
+Copy [`.env.example`](.env.example) to a local `.env` in the directory where you run `rmap`, or export the same names in your shell. The application reads `.env` only when `--ai` is used. Exported environment variables take precedence over values in the file. `.env` and other local `.env.*` files are Git-ignored; `.env.example` is tracked.
 
 | Variable | Meaning |
 | --- | --- |
-| `RUST_NMAP_AI_BASE_URL` | Optional DeepSeek API base URL; blank uses Rig's default endpoint |
-| `RUST_NMAP_AI_API_KEY` | Required DeepSeek API key |
-| `RUST_NMAP_AI_MODEL` | Required model identifier, such as `deepseek-flash` |
-| `RUST_NMAP_AI_TIMEOUT_MS` | Maximum AI request duration in milliseconds; defaults to `15000` |
-| `RUST_NMAP_CVE_FILE` | Optional path to your local advisory TSV file |
+| `RMAP_AI_BASE_URL` | Optional DeepSeek API base URL; blank uses Rig's default endpoint |
+| `RMAP_AI_API_KEY` | Required DeepSeek API key |
+| `RMAP_AI_MODEL` | Required model identifier chosen by the user |
+| `RMAP_AI_TIMEOUT_MS` | Maximum AI request duration in milliseconds; defaults to `15000` |
+| `RMAP_CVE_FILE` | Optional path to your local advisory TSV file |
+
+Existing `RUST_NMAP_*` variables remain accepted as compatibility aliases. Nonempty exported values take precedence over file values; within each source, `RMAP_*` takes precedence over its legacy alias. Your existing local `.env` can keep its previous variable names.
 
 The AI request uses DeepSeek's non-thinking mode to produce a short final answer. The application does not print the API key or provider response body. If configuration, retrieval, or the request fails, it reports the AI error after the measured scan results. Keep credentials out of commits, logs, reports, and shared terminal output.
 
@@ -114,7 +127,9 @@ src/
 │   ├── mod.rs          Argument parsing and validation
 │   └── config.rs       Reserved for a typed scan configuration
 ├── scan/
-│   ├── mod.rs          TCP connections, outcomes, and passive banners
+│   ├── mod.rs          Common entry point and transport dispatch
+│   ├── tcp.rs          TCP connections, outcomes, and passive banners
+│   ├── udp.rs          Sequential UDP probes and outcome classification
 │   └── http.rs         HTTP HEAD probe for open port 80
 ├── model/
 │   ├── mod.rs          Scan and AI result types
@@ -126,7 +141,9 @@ src/
     └── service.rs      Bounded prompt and Rig request
 
 tests/
-├── scan/               Scanner and HTTP unit tests
+├── cli/                Scan mode and argument validation tests
+├── scan/               TCP, UDP classification, and HTTP unit tests
+├── model/              Report formatting tests
 └── ai/                 Configuration, retrieval, and service unit tests
 ```
 

@@ -4,9 +4,25 @@ pub mod report;
 
 use std::time::Duration;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ScanMode {
+    Tcp,
+    Udp,
+}
+
+impl ScanMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Tcp => "tcp",
+            Self::Udp => "udp",
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct ScanResult {
     pub port: u16,
+    pub transport: ScanMode,
     pub status: PortStatus,
     pub service: Option<String>,
     pub elapsed: Duration,
@@ -20,6 +36,8 @@ pub enum PortStatus {
     Closed,
     /// Tentative label for a connection timeout; filtering is not proven.
     Filtered,
+    /// No UDP response; the port may be open or filtered.
+    OpenOrFiltered,
     Unknown,
 }
 
@@ -33,6 +51,7 @@ pub struct AiAnalysis {
 pub struct CveCandidate {
     pub id: String,
     pub port: u16,
+    pub transport: ScanMode,
     pub product: String,
     pub version: String,
     pub description: String,

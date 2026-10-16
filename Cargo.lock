@@ -5327,6 +5327,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rmap"
+version = "0.2.0"
+dependencies = [
+ "reqwest 0.13.5",
+ "rig",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "roaring"
 version = "0.11.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5334,16 +5344,6 @@ checksum = "18bd8a37d17a58532776dcdf6041ce64929adca78e8489d5cacbafe99229d3e1"
 dependencies = [
  "bytemuck",
  "byteorder",
-]
-
-[[package]]
-name = "rust-nmap"
-version = "0.2.0"
-dependencies = [
- "reqwest 0.13.5",
- "rig",
- "serde_json",
- "tokio",
 ]
 
 [[package]]

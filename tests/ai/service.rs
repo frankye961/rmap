@@ -24,3 +24,22 @@ fn reports_json_location_without_response_body() {
     assert!(message.contains("line 1, column 4"));
     assert!(!message.contains("null"));
 }
+
+#[test]
+fn udp_observations_keep_their_transport() {
+    use crate::model::{PortStatus, ScanMode, ScanResult};
+    use std::time::Duration;
+
+    let result = ScanResult {
+        port: 53,
+        transport: ScanMode::Udp,
+        status: PortStatus::Open,
+        service: None,
+        elapsed: Duration::ZERO,
+        error: None,
+        observation: Some("response".into()),
+    };
+    let prompt = super::build_prompt(&[result], &[]);
+    assert!(prompt.contains("53/udp"));
+    assert!(!prompt.contains("53/tcp"));
+}

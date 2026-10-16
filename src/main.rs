@@ -18,12 +18,12 @@ const BANNER: &str = r#"
     / /       \ \
    (_/         \_)
 
-  RRRRR          N   N  M   M    AAA    PPPPP
-  R    R         NN  N  MM MM   A   A   P    P
-  R    R  -----  N N N  M M M  AAAAAAA  P    P
-  RRRRR   -----  N  NN  M   M  A     A  PPPPP
-  R   R          N   N  M   M  A     A  P
-  R    R         N   N  M   M  A     A  P
+  RRRRR   M   M    AAA    PPPPP
+  R    R  MM MM   A   A   P    P
+  R    R  M M M  AAAAAAA  P    P
+  RRRRR   M   M  A     A  PPPPP
+  R   R   M   M  A     A  P
+  R    R  M   M  A     A  P
 "#;
 
 fn main() {
@@ -35,7 +35,7 @@ fn main() {
         return;
     }
 
-    let (target, ports, timeout, use_ai) = match cli::parse_cli(&args) {
+    let (target, ports, timeout, mode, use_ai) = match cli::parse_cli(&args) {
         Ok(config) => config,
         Err(error) => {
             eprintln!("{error}\n{}", cli::USAGE);
@@ -44,7 +44,13 @@ fn main() {
     };
 
     let port_refs: Vec<&str> = ports.iter().map(String::as_str).collect();
-    let results = scan::scan(target.clone(), timeout, &port_refs);
+    let results = match scan::scan(mode, target.clone(), timeout, &port_refs) {
+        Ok(results) => results,
+        Err(error) => {
+            eprintln!("{error}");
+            process::exit(1);
+        }
+    };
     model::report::print_results(&target, &results);
     if use_ai {
         match ai::config::AiConfig::load()
@@ -58,7 +64,7 @@ fn main() {
 
 fn print_banner() {
     println!(
-        "{BANNER}\n  v{} - Scan selected TCP ports and report connection outcomes.\n",
+        "{BANNER}\n  v{} - Rust network scanner with optional AI interpretation.\n",
         env!("CARGO_PKG_VERSION")
     );
 }
