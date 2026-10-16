@@ -51,7 +51,7 @@ Rig is pinned to version 0.42.0, and `Cargo.lock` records the resolved dependenc
 | `--target IPV4` | IPv4 address to scan; hostnames and IPv6 are not accepted |
 | `--ports PORT[,PORT...]` | Ports from 1 through 65535, scanned sequentially in the given order |
 | `--timeout-ms MILLISECONDS` | Positive timeout for a connection attempt and the later banner read or HTTP probe |
-| `--ai` | Request DeepSeek interpretation after the scan report |
+| `--ai` | Request AI model interpretation after the scan report |
 | `--help`, `-h` | Show command syntax without scanning |
 
 Exactly one of `--tcp` or `--udp` is required, together with the target, ports, and timeout options. The modes cannot be combined. Invalid input stops the run before any connection attempt.
