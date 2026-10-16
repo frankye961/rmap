@@ -354,7 +354,7 @@ tests/
 └── ai/                 Configuration, retrieval, search, and service unit tests
 ```
 
-The tests are in separate files under `tests/`, but each source module includes its tests only in a test build. This keeps private helper functions private while making the test files easy to find. See [architecture](docs/architecture.md) and [AI integration](docs/ai-integration.md) for more detail.
+The tests are in separate files under `tests/`, but each source module includes its tests only in a test build. This keeps private helper functions private while making the test files easy to find. See [usage and troubleshooting](docs/usage.md), [architecture](docs/architecture.md), and [AI integration](docs/ai-integration.md) for more detail.
 
 ## Local checks
 
