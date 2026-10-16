@@ -21,24 +21,35 @@ impl AiConfig {
             Err(error) if error.kind() == ErrorKind::NotFound => String::new(),
             Err(error) => return Err(format!("Cannot read .env: {error}")),
         };
-        let setting = |name| env::var(name).ok().or_else(|| file_setting(&dotenv, name));
+        let setting = |name: &str| {
+            let legacy = name.replacen("RMAP_", "RUST_NMAP_", 1);
+            [
+                env::var(name).ok(),
+                env::var(&legacy).ok(),
+                file_setting(&dotenv, name),
+                file_setting(&dotenv, &legacy),
+            ]
+            .into_iter()
+            .flatten()
+            .find(|value| !value.trim().is_empty())
+        };
 
-        let api_key = required(setting("RUST_NMAP_AI_API_KEY"), "RUST_NMAP_AI_API_KEY")?;
-        let model = required(setting("RUST_NMAP_AI_MODEL"), "RUST_NMAP_AI_MODEL")?;
-        let base_url = setting("RUST_NMAP_AI_BASE_URL").filter(|value| !value.trim().is_empty());
+        let api_key = required(setting("RMAP_AI_API_KEY"), "RMAP_AI_API_KEY")?;
+        let model = required(setting("RMAP_AI_MODEL"), "RMAP_AI_MODEL")?;
+        let base_url = setting("RMAP_AI_BASE_URL").filter(|value| !value.trim().is_empty());
         if let Some(url) = &base_url
             && !(url.starts_with("https://") || url.starts_with("http://"))
         {
-            return Err("RUST_NMAP_AI_BASE_URL must start with http:// or https://".into());
+            return Err("RMAP_AI_BASE_URL must start with http:// or https://".into());
         }
-        let timeout_ms = setting("RUST_NMAP_AI_TIMEOUT_MS")
+        let timeout_ms = setting("RMAP_AI_TIMEOUT_MS")
             .unwrap_or_else(|| "15000".into())
             .parse::<u64>()
-            .map_err(|_| "RUST_NMAP_AI_TIMEOUT_MS must be a positive integer")?;
+            .map_err(|_| "RMAP_AI_TIMEOUT_MS must be a positive integer")?;
         if timeout_ms == 0 {
-            return Err("RUST_NMAP_AI_TIMEOUT_MS must be greater than zero".into());
+            return Err("RMAP_AI_TIMEOUT_MS must be greater than zero".into());
         }
-        let cve_file = setting("RUST_NMAP_CVE_FILE")
+        let cve_file = setting("RMAP_CVE_FILE")
             .filter(|value| !value.is_empty())
             .map(PathBuf::from);
         Ok(Self {

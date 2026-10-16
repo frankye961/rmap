@@ -4,6 +4,12 @@ pub mod report;
 
 use std::time::Duration;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ScanMode {
+    Tcp,
+    Udp,
+}
+
 #[derive(Debug)]
 pub struct ScanResult {
     pub port: u16,

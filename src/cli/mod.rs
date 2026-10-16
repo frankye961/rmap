@@ -5,18 +5,32 @@ use std::time::Duration;
 
 mod config;
 
-pub const USAGE: &str =
-    "Usage: rust-nmap --target IPV4 --ports PORT[,PORT...] --timeout-ms MILLISECONDS [--ai]";
+use crate::model::ScanMode;
 
-pub fn parse_cli(args: &[String]) -> Result<(String, Vec<String>, Duration, bool), String> {
+pub const USAGE: &str = "Usage: rmap (--tcp | --udp) --target IPV4 --ports PORT[,PORT...] --timeout-ms MILLISECONDS [--ai]";
+
+pub fn parse_cli(
+    args: &[String],
+) -> Result<(String, Vec<String>, Duration, ScanMode, bool), String> {
     let mut target = None;
     let mut ports = None;
     let mut timeout = None;
     let mut use_ai = false;
+    let mut mode = None;
     let mut args = args.iter();
 
     while let Some(flag) = args.next() {
         match flag.as_str() {
+            "--tcp" | "--udp" => {
+                let selected = if flag == "--tcp" {
+                    ScanMode::Tcp
+                } else {
+                    ScanMode::Udp
+                };
+                if mode.replace(selected).is_some() {
+                    return Err("Choose exactly one scan mode: --tcp or --udp".into());
+                }
+            }
             "--target" => {
                 let value = args.next().ok_or("Missing value for --target")?;
                 let address = value
@@ -71,6 +85,11 @@ pub fn parse_cli(args: &[String]) -> Result<(String, Vec<String>, Duration, bool
         target.ok_or("Missing --target")?,
         ports.ok_or("Missing --ports")?,
         timeout.ok_or("Missing --timeout-ms")?,
+        mode.ok_or("Missing scan mode: choose --tcp or --udp")?,
         use_ai,
     ))
 }
+
+#[cfg(test)]
+#[path = "../../tests/cli/parsing.rs"]
+mod tests;
