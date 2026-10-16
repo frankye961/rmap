@@ -1,4 +1,4 @@
-# rmap (THIS IS A PoC)
+# rmap (ALPHA version)
 
 `rmap` aims to be a network scanner inspired by Nmap, written in Rust and extended with AI interpretation. Its goal is to find and describe exposed services, then help a user understand what observed service versions might mean, including possible CVE leads. Scan measurements and AI conclusions stay separate so the tool can show what it observed without presenting a model's guess as a fact.
 
@@ -51,7 +51,7 @@ Rig is pinned to version 0.42.0, and `Cargo.lock` records the resolved dependenc
 | `--target IPV4` | IPv4 address to scan; hostnames and IPv6 are not accepted |
 | `--ports PORT[,PORT...]` | Ports from 1 through 65535, scanned sequentially in the given order |
 | `--timeout-ms MILLISECONDS` | Positive timeout for a connection attempt and the later banner read or HTTP probe |
-| `--ai` | Request AI model interpretation after the scan report |
+| `--ai` | Request DeepSeek interpretation after the scan report |
 | `--help`, `-h` | Show command syntax without scanning |
 
 Exactly one of `--tcp` or `--udp` is required, together with the target, ports, and timeout options. The modes cannot be combined. Invalid input stops the run before any connection attempt.
@@ -313,8 +313,8 @@ Copy [`.env.example`](.env.example) to a local `.env` in the directory where you
 
 | Variable | Meaning |
 | --- | --- |
-| `RMAP_AI_BASE_URL` | Optional AI model API base URL; blank uses Rig's default endpoint |
-| `RMAP_AI_API_KEY` | Required AI API key |
+| `RMAP_AI_BASE_URL` | Optional DeepSeek API base URL; blank uses Rig's default endpoint |
+| `RMAP_AI_API_KEY` | Required DeepSeek API key |
 | `RMAP_AI_MODEL` | Required model identifier chosen by the user |
 | `RMAP_AI_TIMEOUT_MS` | Maximum duration of the complete AI research session in milliseconds; defaults to `60000` |
 | `RMAP_SEARCH_API_KEY` | Brave Search API key for live CVE, advisory, and Exploit-DB searches |
