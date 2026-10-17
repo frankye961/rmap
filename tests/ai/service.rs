@@ -97,7 +97,7 @@ fn research_reads_banner_beyond_console_preview_and_keeps_stop_reason() {
 
 #[test]
 fn includes_structured_ssh_software_and_version_in_research_context() {
-    use crate::model::service_information::ServiceInformation;
+    use crate::mapper::service_information::map_tcp_service;
     use crate::model::{PortStatus, ScanMode, ScanResult};
     use std::time::Duration;
 
@@ -110,13 +110,12 @@ fn includes_structured_ssh_software_and_version_in_research_context() {
         error: None,
         observation: Some("peer closed connection".into()),
         banner: Some(b"SSH-2.0-OpenSSH_10.0p2 Debian-7+deb13u4\r\n".to_vec()),
-        service_information: Some(ServiceInformation {
-            transport: ScanMode::Tcp,
-            service: Some("ssh".into()),
-            product: Some("OpenSSH".into()),
-            version: Some("10.0p2".into()),
-            observation: Some("Debian-7+deb13u4".into()),
-        }),
+        service_information: Some(map_tcp_service(
+            "ssh",
+            Some("OpenSSH"),
+            Some("10.0p2"),
+            Some("Debian-7+deb13u4"),
+        )),
     };
     let prompt = super::build_prompt(&[result], &[]);
     assert!(prompt.contains("product OpenSSH; version 10.0p2; comments Debian-7+deb13u4"));

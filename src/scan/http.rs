@@ -9,6 +9,8 @@ use reqwest::{
     redirect::Policy,
 };
 
+use crate::utils::banner::escape_bytes;
+
 fn client(timeout: Duration) -> Result<Client, reqwest::Error> {
     Client::builder()
         .timeout(timeout)
@@ -23,18 +25,11 @@ fn head_request(client: &Client, target: SocketAddr) -> Result<Request, reqwest:
 
 fn server_observation(server: Option<&HeaderValue>) -> Option<String> {
     server.map(|server| {
-        let server_preview: String = server
-            .as_bytes()
-            .iter()
-            .take(64)
-            .flat_map(|byte| std::ascii::escape_default(*byte))
-            .map(char::from)
-            .collect();
+        let server_preview = escape_bytes(server.as_bytes(), 64);
         format!("Server: {server_preview}")
     })
 }
 
-#[tokio::main(flavor = "current_thread")]
 pub async fn probe(
     target: SocketAddr,
     timeout: Duration,

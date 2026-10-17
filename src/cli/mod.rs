@@ -4,18 +4,18 @@ use std::net::Ipv4Addr;
 use std::time::Duration;
 
 mod config;
+pub use config::CliConfig;
 
-use crate::model::ScanMode;
+use crate::model::{DEFAULT_CONCURRENCY, MAX_CONCURRENCY, ScanMode};
 
-pub const USAGE: &str = "Usage: rmap (--tcp | --udp) --target IPV4 --ports PORT[,PORT...] --timeout-ms MILLISECONDS [--ai]";
+pub const USAGE: &str = "Usage: rmap --target IPV4 [--tcp | --udp] [--ports PORT[,PORT...]] [--timeout-ms MILLISECONDS] [--concurrency N] [--ai]\nDefaults: TCP, all ports from 1 to 65535, timeout 1000 ms, concurrency 256 (1-1024).\nFull-range scans show only open ports; explicit --ports lists show all outcomes.";
 
-pub fn parse_cli(
-    args: &[String],
-) -> Result<(String, Vec<String>, Duration, ScanMode, bool), String> {
+pub fn parse_cli(args: &[String]) -> Result<CliConfig, String> {
     let mut target = None;
     let mut ports = None;
     let mut timeout = None;
     let mut use_ai = false;
+    let mut concurrency = None;
     let mut mode = None;
     let mut args = args.iter();
 
@@ -28,7 +28,7 @@ pub fn parse_cli(
                     ScanMode::Udp
                 };
                 if mode.replace(selected).is_some() {
-                    return Err("Choose exactly one scan mode: --tcp or --udp".into());
+                    return Err("Specify only one scan mode: --tcp or --udp".into());
                 }
             }
             "--target" => {
@@ -71,6 +71,20 @@ pub fn parse_cli(
                     return Err("--timeout-ms was given more than once".to_string());
                 }
             }
+            "--concurrency" => {
+                let value = args.next().ok_or("Missing value for --concurrency")?;
+                let limit = value
+                    .parse::<usize>()
+                    .map_err(|_| "--concurrency must be an integer from 1 to 1024")?;
+                if !(1..=MAX_CONCURRENCY).contains(&limit) {
+                    return Err(format!(
+                        "--concurrency must be between 1 and {MAX_CONCURRENCY}"
+                    ));
+                }
+                if concurrency.replace(limit).is_some() {
+                    return Err("--concurrency was given more than once".into());
+                }
+            }
             "--ai" => {
                 if use_ai {
                     return Err("--ai was given more than once".into());
@@ -81,13 +95,15 @@ pub fn parse_cli(
         }
     }
 
-    Ok((
-        target.ok_or("Missing --target")?,
-        ports.ok_or("Missing --ports")?,
-        timeout.ok_or("Missing --timeout-ms")?,
-        mode.ok_or("Missing scan mode: choose --tcp or --udp")?,
+    Ok(CliConfig {
+        target: target.ok_or("Missing --target")?,
+        full_scan: ports.is_none(),
+        ports: ports.unwrap_or_else(|| (1..=u16::MAX).map(|port| port.to_string()).collect()),
+        timeout: timeout.unwrap_or(Duration::from_millis(1000)),
+        mode: mode.unwrap_or(ScanMode::Tcp),
         use_ai,
-    ))
+        concurrency: concurrency.unwrap_or(DEFAULT_CONCURRENCY),
+    })
 }
 
 #[cfg(test)]

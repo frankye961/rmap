@@ -7,6 +7,7 @@ use rig::providers::deepseek;
 use crate::ai::config::AiConfig;
 use crate::ai::retrieval;
 use crate::model::{AiAnalysis, CveCandidate, PortStatus, ScanResult};
+use crate::utils::banner::banner_text;
 
 const INSTRUCTIONS: &str = r#"You research vulnerabilities for measured TCP and UDP scan results.
 Use the observed product and version in banners or HTTP Server headers as the research starting point, even when the service label is unknown (for example, '220 (vsFTPd 3.0.5)'). Do not infer software from a port number alone.
@@ -122,11 +123,7 @@ fn build_prompt(results: &[ScanResult], candidates: &[CveCandidate]) -> String {
         )
         .take(8)
     {
-        let banner_text = result
-            .banner
-            .as_deref()
-            .filter(|data| !data.is_empty())
-            .map(String::from_utf8_lossy);
+        let banner_text = banner_text(result.banner.as_deref());
         let detail: String = banner_text
             .as_deref()
             .or(result.observation.as_deref())

@@ -1,92 +1,88 @@
-//! Sequential TCP scans, passive banners, and the HTTP probe.
+//! One TCP connection attempt with optional passive banner or HTTP probing.
 
 use std::io::ErrorKind;
-use std::io::Read;
-use std::net::{SocketAddr, TcpStream};
+use std::net::SocketAddr;
+
 use std::time::{Duration, Instant};
+use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::net::TcpStream;
+use tokio::time::{Instant as Deadline, timeout_at};
 
 use super::{http, identify};
 use crate::model::{PortStatus, ScanMode, ScanResult};
 
-pub fn scan(address: String, timeout: Duration, ports: &[&str]) -> Vec<ScanResult> {
-    let mut results = Vec::new();
+pub(super) async fn scan_port(target: SocketAddr, timeout: Duration) -> ScanResult {
+    let started = Instant::now();
+    let connection = tokio::time::timeout(timeout, TcpStream::connect(target))
+        .await
+        .unwrap_or_else(|_| Err(std::io::Error::from(ErrorKind::TimedOut)));
+    let elapsed = started.elapsed();
 
-    for port in ports {
-        let target = match format!("{address}:{port}").parse::<SocketAddr>() {
-            Ok(target) => target,
-            Err(error) => {
-                eprintln!("Invalid target address {address}:{port}: {error}");
-                continue;
-            }
-        };
-
-        let started = Instant::now();
-        let connection = TcpStream::connect_timeout(&target, timeout);
-        let elapsed = started.elapsed();
-
-        let mut result = match connection {
-            Ok(stream) => {
-                let (service, observation, banner) = if target.port() == 80 {
-                    drop(stream);
-                    match http::probe(target, timeout) {
-                        Ok(response) => (Some("http".to_string()), response, None),
-                        Err(error) => (None, Some(format!("HTTP probe failed: {error}")), None),
-                    }
-                } else {
-                    let (observation, banner) = handle_connection(stream, timeout);
-                    (None, Some(observation), banner)
-                };
-                ScanResult {
-                    port: target.port(),
-                    transport: ScanMode::Tcp,
-                    status: PortStatus::Open,
-                    service,
-                    elapsed,
-                    error: None,
-                    observation,
-                    banner,
-                    service_information: None,
+    let mut result = match connection {
+        Ok(stream) => {
+            let (service, observation, banner) = if target.port() == 80 {
+                drop(stream);
+                match http::probe(target, timeout).await {
+                    Ok(response) => (Some("http".to_string()), response, None),
+                    Err(error) => (None, Some(format!("HTTP probe failed: {error}")), None),
                 }
+            } else {
+                let (observation, banner) = read_banner(stream, timeout).await;
+                (None, Some(observation), banner)
+            };
+            ScanResult {
+                port: target.port(),
+                transport: ScanMode::Tcp,
+                status: PortStatus::Open,
+                service,
+                elapsed,
+                error: None,
+                observation,
+                banner,
+                service_information: None,
             }
-            Err(error) => {
-                let status = match error.kind() {
-                    ErrorKind::ConnectionRefused => PortStatus::Closed,
-                    ErrorKind::TimedOut => PortStatus::Filtered,
-                    _ => PortStatus::Unknown,
-                };
-                ScanResult {
-                    port: target.port(),
-                    transport: ScanMode::Tcp,
-                    status,
-                    service: None,
-                    elapsed,
-                    error: Some(error.to_string()),
-                    observation: None,
-                    banner: None,
-                    service_information: None,
-                }
+        }
+        Err(error) => {
+            let status = match error.kind() {
+                ErrorKind::ConnectionRefused => PortStatus::Closed,
+                ErrorKind::TimedOut => PortStatus::Filtered,
+                _ => PortStatus::Unknown,
+            };
+            ScanResult {
+                port: target.port(),
+                transport: ScanMode::Tcp,
+                status,
+                service: None,
+                elapsed,
+                error: Some(error.to_string()),
+                observation: None,
+                banner: None,
+                service_information: None,
             }
-        };
-        identify::collect_banner(&mut result);
-        results.push(result);
-    }
-
-    results
+        }
+    };
+    identify::collect_banner(&mut result);
+    result
 }
 
-fn handle_connection(mut stream: TcpStream, timeout: Duration) -> (String, Option<Vec<u8>>) {
-    let mut buffer = [0; 512];
+async fn read_banner(
+    mut stream: impl AsyncRead + Unpin,
+    timeout: Duration,
+) -> (String, Option<Vec<u8>>) {
+    let mut buffer = [0; 64];
     let mut collected = Vec::new();
-    let start = Instant::now();
-    for buffer in buffer.chunks_mut(64) {
-        let remaining_timeout = calculate_remaning_timeout(start, timeout);
-        if remaining_timeout.is_zero() {
+    let deadline = Deadline::now() + timeout;
+    while collected.len() < 512 {
+        // One deadline bounds the entire banner, including repeated short reads.
+        if Deadline::now() >= deadline {
             return banner_result(&collected, "read timed out");
         }
-        if let Err(error) = stream.set_read_timeout(Some(remaining_timeout)) {
-            return banner_result(&collected, &format!("could not set read timeout: {error}"));
-        }
-        match stream.read(buffer) {
+        let capacity = buffer.len().min(512 - collected.len());
+        let read = match timeout_at(deadline, stream.read(&mut buffer[..capacity])).await {
+            Ok(read) => read,
+            Err(_) => return banner_result(&collected, "read timed out"),
+        };
+        match read {
             Ok(0) => return banner_result(&collected, "peer closed connection"),
             Ok(bytes_read) => {
                 collected.extend_from_slice(&buffer[..bytes_read]);
@@ -97,19 +93,11 @@ fn handle_connection(mut stream: TcpStream, timeout: Duration) -> (String, Optio
             Err(error) if matches!(error.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock) => {
                 return banner_result(&collected, "read timed out");
             }
+            Err(error) if error.kind() == ErrorKind::Interrupted => continue,
             Err(error) => return banner_result(&collected, &format!("read error: {error}")),
         }
     }
     banner_result(&collected, "")
-}
-
-fn calculate_remaning_timeout(started: Instant, timeout: Duration) -> Duration {
-    let elapsed = started.elapsed();
-    if elapsed >= timeout {
-        Duration::from_secs(0)
-    } else {
-        timeout - elapsed
-    }
 }
 
 fn banner_result(data: &[u8], stop_reason: &str) -> (String, Option<Vec<u8>>) {

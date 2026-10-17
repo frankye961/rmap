@@ -82,3 +82,35 @@ fn identifies_nonstandard_port_without_changing_scan_measurements() {
     collect_banner(&mut result);
     assert!(result.service_information.is_none());
 }
+
+#[test]
+fn extracts_vsftpd_product_and_version() {
+    let info = identify_service(b"220 (vsFTPd 3.0.5)\r\n").unwrap();
+    assert_eq!(info.service.as_deref(), Some("ftp"));
+    assert_eq!(info.product.as_deref(), Some("vsFTPd"));
+    assert_eq!(info.version.as_deref(), Some("3.0.5"));
+}
+
+#[test]
+fn ftp_does_not_match_generic_greetings_or_malformed_versions() {
+    for banner in [
+        b"220 mail.example.test ESMTP ready\r\n".as_slice(),
+        b"220 (vsFTPd 3.0.5)",
+        b"220 (vsFTPd 3.0.5\r\n",
+        b"220 (vsFTPd )\r\n",
+        b"220 (vsFTPd 3..5)\r\n",
+        b"220 (vsFTPwrong 3.0.5)\r\n",
+    ] {
+        assert!(identify_service(banner).is_none());
+    }
+}
+
+#[test]
+fn filezilla_keeps_its_own_product_and_optional_version() {
+    let info = identify_service(b"220-FileZilla Server version 1.8.2\r\n").unwrap();
+    assert_eq!(info.product.as_deref(), Some("FileZilla Server"));
+    assert_eq!(info.version.as_deref(), Some("1.8.2"));
+    let info = identify_service(b"220-FileZilla Server\r\n").unwrap();
+    assert_eq!(info.product.as_deref(), Some("FileZilla Server"));
+    assert!(info.version.is_none());
+}

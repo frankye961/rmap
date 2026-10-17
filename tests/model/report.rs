@@ -64,3 +64,58 @@ fn strips_banner_line_ending_without_quotes_or_empty_reason() {
     };
     assert!(format_result(&result).ends_with("SSH-2.0-OpenSSH_10.0"));
 }
+
+fn measured_results() -> Vec<ScanResult> {
+    [
+        PortStatus::Open,
+        PortStatus::Closed,
+        PortStatus::Filtered,
+        PortStatus::OpenOrFiltered,
+        PortStatus::Unknown,
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, status)| ScanResult {
+        port: index as u16 + 1,
+        transport: ScanMode::Udp,
+        status,
+        service: None,
+        elapsed: Duration::ZERO,
+        error: None,
+        observation: None,
+        banner: None,
+        service_information: None,
+    })
+    .collect()
+}
+
+#[test]
+fn only_full_scans_hide_non_open_rows_without_changing_measurements() {
+    let results = measured_results();
+    for full_scan in [false, true] {
+        let mut output = Vec::new();
+        super::write_results(&mut output, "192.0.2.21", &results, full_scan).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("1/udp"));
+        for port in 2..=5 {
+            assert_eq!(output.contains(&format!("{port}/udp")), !full_scan);
+        }
+        assert_eq!(output.contains("open|filtered ="), !full_scan);
+        assert_eq!(
+            output.contains("Open ports shown: 1; ports scanned: 5."),
+            full_scan
+        );
+    }
+    assert_eq!(results.len(), 5);
+    assert_eq!(results[3].status, PortStatus::OpenOrFiltered);
+}
+
+#[test]
+fn full_scan_without_open_ports_prints_an_explicit_message() {
+    let results = measured_results();
+    let mut output = Vec::new();
+    super::write_results(&mut output, "192.0.2.21", &results[1..], true).unwrap();
+    let output = String::from_utf8(output).unwrap();
+    assert!(output.contains("No open ports found among 4 scanned ports."));
+    assert!(!output.contains("2/udp"));
+}

@@ -5,8 +5,10 @@ use std::process;
 
 mod ai;
 mod cli;
+mod mapper;
 mod model;
 mod scan;
+mod utils;
 
 const BANNER: &str = r#"
       \       /
@@ -35,7 +37,15 @@ fn main() {
         return;
     }
 
-    let (target, ports, timeout, mode, use_ai) = match cli::parse_cli(&args) {
+    let cli::CliConfig {
+        target,
+        ports,
+        full_scan,
+        timeout,
+        mode,
+        use_ai,
+        concurrency,
+    } = match cli::parse_cli(&args) {
         Ok(config) => config,
         Err(error) => {
             eprintln!("{error}\n{}", cli::USAGE);
@@ -43,19 +53,41 @@ fn main() {
         }
     };
 
+    let ai_config = if use_ai {
+        match ai::config::AiConfig::load() {
+            Ok(config) => Some(config),
+            Err(error) => {
+                eprintln!("AI analysis unavailable: {error}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let mut progress =
+        model::progress::ScanProgress::new(&target, mode, ports.len(), timeout, concurrency);
     let port_refs: Vec<&str> = ports.iter().map(String::as_str).collect();
-    let results = match scan::scan(mode, target.clone(), timeout, &port_refs) {
+    let results = match scan::scan(
+        mode,
+        target.clone(),
+        timeout,
+        &port_refs,
+        concurrency,
+        |completed, result| progress.update(completed, result),
+    ) {
         Ok(results) => results,
         Err(error) => {
             eprintln!("{error}");
             process::exit(1);
         }
     };
-    model::report::print_results(&target, &results);
-    if use_ai {
-        match ai::config::AiConfig::load()
-            .and_then(|config| ai::service::analyze(&config, &results))
-        {
+    model::report::print_results(&target, &results, full_scan);
+    if let Some(config) = ai_config {
+        eprintln!(
+            "Starting AI web research and interpretation (session timeout: {} ms).",
+            config.timeout.as_millis()
+        );
+        match ai::service::analyze(&config, &results) {
             Ok(analysis) => model::report::print_ai_analysis(&analysis),
             Err(error) => eprintln!("\nAI analysis unavailable: {error}"),
         }

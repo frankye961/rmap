@@ -1,33 +1,69 @@
 //! Presentation of measured results and separate AI interpretation.
 
 use crate::model::{AiAnalysis, PortStatus, ScanResult};
+use crate::utils::banner::escape_bytes;
 
-pub fn print_results(target: &str, results: &[ScanResult]) {
-    println!("Scan results for {target}\n");
-    println!(
+pub fn print_results(target: &str, results: &[ScanResult], full_scan: bool) {
+    write_results(&mut std::io::stdout().lock(), target, results, full_scan)
+        .expect("Failed to print scan results");
+}
+
+fn write_results(
+    output: &mut impl std::io::Write,
+    target: &str,
+    results: &[ScanResult],
+    full_scan: bool,
+) -> std::io::Result<()> {
+    writeln!(output, "Scan results for {target}\n")?;
+    writeln!(
+        output,
         "{:<9} {:<14} {:<9} {:>11}  DETAIL",
         "PORT", "STATE", "SERVICE", "ELAPSED"
-    );
-    println!("{}", "-".repeat(82));
+    )?;
+    writeln!(output, "{}", "-".repeat(82))?;
 
+    let mut displayed = 0;
     for result in results {
-        println!("{}", format_result(result));
+        if !full_scan || result.status == PortStatus::Open {
+            writeln!(output, "{}", format_result(result))?;
+            displayed += 1;
+        }
     }
-
-    if results
-        .iter()
-        .any(|result| result.status == PortStatus::Filtered)
-    {
-        println!("\nfiltered = connection timed out; filtering is unconfirmed.");
+    if full_scan {
+        if displayed == 0 {
+            writeln!(
+                output,
+                "No open ports found among {} scanned ports.",
+                results.len()
+            )?;
+        } else {
+            writeln!(
+                output,
+                "\nOpen ports shown: {displayed}; ports scanned: {}.",
+                results.len()
+            )?;
+        }
+    } else {
+        if results
+            .iter()
+            .any(|result| result.status == PortStatus::Filtered)
+        {
+            writeln!(
+                output,
+                "\nfiltered = connection timed out; filtering is unconfirmed."
+            )?;
+        }
+        if results
+            .iter()
+            .any(|result| result.status == PortStatus::OpenOrFiltered)
+        {
+            writeln!(
+                output,
+                "\nopen|filtered = no UDP response before timeout; the port may be open or filtered."
+            )?;
+        }
     }
-    if results
-        .iter()
-        .any(|result| result.status == PortStatus::OpenOrFiltered)
-    {
-        println!(
-            "\nopen|filtered = no UDP response before timeout; the port may be open or filtered."
-        );
-    }
+    Ok(())
 }
 
 pub fn print_ai_analysis(analysis: &AiAnalysis) {
@@ -128,21 +164,12 @@ fn format_preview(data: &[u8]) -> String {
         .or_else(|| data.strip_suffix(b"\n"))
         .unwrap_or(data);
     let preview_len = data.len().min(64);
-    let preview = create_preview(&data[..preview_len], preview_len);
+    let preview = escape_bytes(data, preview_len);
     if data.len() > preview_len {
         format!("{preview} (preview truncated)")
     } else {
         preview
     }
-}
-
-fn create_preview(data: &[u8], preview_len: usize) -> String {
-    let preview: String = data[..preview_len]
-        .iter()
-        .flat_map(|byte| std::ascii::escape_default(*byte))
-        .map(char::from)
-        .collect();
-    preview
 }
 
 #[cfg(test)]

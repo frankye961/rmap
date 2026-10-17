@@ -1,8 +1,9 @@
 use std::io::{self, ErrorKind};
 use std::time::Duration;
 
-use super::{classify_response, scan};
-use crate::model::PortStatus;
+use super::classify_response;
+use crate::model::{PortStatus, ScanMode};
+use crate::scan::scan;
 
 #[test]
 fn silence_is_open_or_filtered_and_refusal_is_closed() {
@@ -30,12 +31,25 @@ fn empty_datagram_is_a_response_and_binary_preview_is_safe() {
 
 #[test]
 fn validates_before_sending_any_probes() {
-    assert!(scan("127.0.0.1".into(), Duration::ZERO, &["53"]).is_err());
     assert!(
         scan(
+            ScanMode::Udp,
+            "127.0.0.1".into(),
+            Duration::ZERO,
+            &["53"],
+            2,
+            |_, _| {}
+        )
+        .is_err()
+    );
+    assert!(
+        scan(
+            ScanMode::Udp,
             "127.0.0.1".into(),
             Duration::from_secs(1),
-            &["53", "invalid"]
+            &["53", "invalid"],
+            2,
+            |_, _| {}
         )
         .is_err()
     );
