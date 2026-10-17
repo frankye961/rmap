@@ -14,6 +14,8 @@ fn retrieves_only_observed_exact_version() {
         elapsed: Duration::ZERO,
         error: None,
         observation: Some("Server: Apache/2.4.68 (Debian)".into()),
+        banner: None,
+        service_information: None,
     }];
     let corpus = concat!(
         "CVE-2024-12345\tApache\t2.4.68\thttps://example.test/a\tCandidate one\n",
@@ -35,7 +37,9 @@ fn matches_space_separated_ftp_banner_without_version_prefix_false_positive() {
         service: None,
         elapsed: Duration::ZERO,
         error: None,
-        observation: Some("220 (vsFTPd 3.0.5)".into()),
+        observation: Some("read timed out".into()),
+        banner: Some(b"220 (vsFTPd 3.0.5)".to_vec()),
+        service_information: None,
     };
     let text = concat!(
         "CVE-2025-14242\tvsftpd\t3.0.5\thttps://security-tracker.debian.org/tracker/CVE-2025-14242\tDistribution-specific patch; applicability requires verification\n",

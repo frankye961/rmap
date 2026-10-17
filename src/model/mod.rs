@@ -1,7 +1,9 @@
 //! Structured scan measurements and separate AI analysis data.
 
 pub mod report;
+pub mod service_information;
 
+use self::service_information::ServiceInformation;
 use std::time::Duration;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -28,6 +30,8 @@ pub struct ScanResult {
     pub elapsed: Duration,
     pub error: Option<String>,
     pub observation: Option<String>,
+    pub banner: Option<Vec<u8>>,
+    pub service_information: Option<ServiceInformation>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

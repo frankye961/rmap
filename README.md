@@ -1,5 +1,7 @@
 # rmap (ALPHA version)
 
+Current version: **0.3.0**.
+
 `rmap` aims to be a network scanner inspired by Nmap, written in Rust and extended with AI interpretation. Its goal is to find and describe exposed services, then help a user understand what observed service versions might mean, including possible CVE leads. Scan measurements and AI conclusions stay separate so the tool can show what it observed without presenting a model's guess as a fact.
 
 The current implementation scans selected TCP or UDP ports on one IPv4 address, collects limited banners, probes HTTP on port 80, and can ask DeepSeek to research public CVEs and exploit references using a web search tool. It does not yet offer Nmap's range of scan methods, host discovery, concurrent scanning, broad service fingerprinting, or exhaustive vulnerability detection. Building it is also a way to learn Rust networking, I/O, timeouts, and error handling.
@@ -8,7 +10,7 @@ The current implementation scans selected TCP or UDP ports on one IPv4 address, 
 
 1. The CLI validates an IPv4 target, a scan mode (`--tcp` or `--udp`), a comma-separated list of ports, and a positive timeout.
 2. The common scanner entry point dispatches to the selected transport. UDP sends an empty datagram to each selected port and waits for a response. For each TCP port, the scanner attempts a TCP connection and records its elapsed connection time and outcome in a `ScanResult`.
-3. On an open port other than 80, it reads a passive banner. On open port 80, it sends an HTTP `HEAD` probe using a separate connection.
+3. On an open port other than 80, it reads a passive banner and stores the collected bytes separately from the reason reading stopped. On open port 80, it sends an HTTP `HEAD` probe using a separate connection.
 4. The report prints the measured results before any optional AI work.
 5. With `--ai`, the program sends bounded observations to DeepSeek through Rig. With a Brave Search key configured, the agent researches CVEs, vendor and distribution advisories, and Exploit-DB references using a public web search tool. An optional local advisory file can supplement the web evidence. Interpretation and retrieved source links appear separately from measurements. AI or search failures leave the scan report visible.
 
@@ -74,7 +76,9 @@ Each report row includes the port, connection state, an optional service label, 
 | `open\|filtered` | No UDP response arrived before the read timeout; an open service may silently ignore the probe. |
 | `undetermined` | Another socket or I/O error prevented classification. |
 
-For most open ports, the scanner passively reads up to 512 bytes, stopping at a newline, a read timeout, a closed connection, or the byte limit. The report shows a printable preview of at most 64 bytes. A complete SSH identification line gives the port an `ssh` service label. Other banners remain observations even when the service is unknown.
+For most open TCP ports, the scanner passively reads up to 512 bytes, stopping at a newline, a read timeout, a closed connection, or the byte limit. `ScanResult.banner` preserves the collected bytes, while `observation` records the stop reason separately. A complete supported SSH identification line gives the port an `ssh` service label. For OpenSSH, identification also stores the product, software version, and optional distribution comments separately; for example, `OpenSSH`, `10.0p2`, and `Debian-7+deb13u4`. Unknown SSH implementations retain an `ssh` label without guessed product/version fields. Other banners are retained even when the service is unknown.
+
+Reporting creates a printable preview from at most 64 banner bytes, escapes control bytes, and removes a trailing line ending. Longer banners receive a truncation marker. When reading stops after receiving some data, the report includes both the preview and the stop reason, such as `partial banner (read timed out)`. Creating this preview does not shorten or modify the stored bytes.
 
 For open port 80, the scanner makes an HTTP `HEAD` request. A valid HTTP response gives the port an `http` label; the report shows the `Server` header when present. The HTTP probe does not follow redirects or use a configured proxy. It does not display HTTP status codes. A failed probe or banner read does not change a successful TCP connection into a closed result.
 
@@ -110,7 +114,7 @@ rmap --tcp --target 192.0.2.21 --ports 80,22,21,8080,443,111,139,445,2409,8000 -
   R   R   M   M  A     A  P
   R    R  M   M  A     A  P
 
-  v0.2.0 - Rust network scanner with optional AI interpretation.
+  v0.3.0 - Rust network scanner with optional AI interpretation.
 
 Scan results for 192.0.2.21
 
@@ -285,7 +289,7 @@ Add `--ai` to ask DeepSeek to explain the completed scan:
 cargo run -- --tcp --target 127.0.0.1 --ports 22,80,8080 --timeout-ms 1000 --ai
 ```
 
-AI is off by default. With `--ai`, DeepSeek receives at most eight port observations (open ports first), including service labels, states, and up to 160 characters of each banner, HTTP header, or error. A label such as `ssh` or an unknown label does not prevent research: the agent uses the product/version text in the observation, such as `220 (vsFTPd 3.0.5)`.
+AI is off by default. With `--ai`, DeepSeek receives at most eight port observations (open ports first), including service labels, states, and up to 160 characters of each banner, HTTP header, or error. For passive TCP banners, this text comes from the preserved bytes rather than the 64-byte console preview; a nonempty stop reason is supplied separately. A label such as `ssh` or an unknown label does not prevent research: the agent uses the observed product/version text, such as `220 (vsFTPd 3.0.5)`.
 
 For live research, configure `RMAP_SEARCH_API_KEY` with a [Brave Search API key](https://api-dashboard.search.brave.com/documentation/guides/authentication). This is a separate credential from the DeepSeek key. The Rig agent can call `search_web` to:
 
@@ -305,7 +309,7 @@ An optional local UTF-8 TSV file can supplement live research through `RMAP_CVE_
 CVE-ID<TAB>product<TAB>exact-version<TAB>https://source-url<TAB>description
 ```
 
-The reader ignores lines beginning with `#`, limits the file to 1 MiB, and selects at most five exact product/version text matches. It recognizes slash, underscore, and space separators, including `vsFTPd 3.0.5`. This file is not required for web research; local lookup errors are reported without preventing the agent from searching online. Advisory matches remain candidates requiring independent verification.
+The reader ignores lines beginning with `#`, limits the file to 1 MiB, and selects at most five exact product/version text matches. It searches the preserved banner when present, falling back to observation text such as an HTTP `Server` header. It recognizes slash, underscore, and space separators, including `vsFTPd 3.0.5`. This file is not required for web research; local lookup errors are reported without preventing the agent from searching online. Advisory matches remain candidates requiring independent verification.
 
 ### AI configuration
 
@@ -335,11 +339,12 @@ src/
 ├── scan/
 │   ├── mod.rs          Common entry point and transport dispatch
 │   ├── tcp.rs          TCP connections, outcomes, and passive banners
+│   ├── identify.rs     Banner recognition and OpenSSH product/version parsing
 │   ├── udp.rs          Sequential UDP probes and outcome classification
 │   └── http.rs         HTTP HEAD probe for open port 80
 ├── model/
-│   ├── mod.rs          Scan and AI result types
-│   └── report.rs       Terminal rendering of results and interpretation
+│   ├── mod.rs          Scan results, preserved banner bytes, and AI data
+│   └── report.rs       Safe banner previews and terminal report rendering
 └── ai/
     ├── mod.rs          AI modules
     ├── config.rs       DeepSeek settings and local .env loading

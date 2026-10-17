@@ -93,11 +93,26 @@ fn format_result(result: &ScanResult) -> String {
         PortStatus::OpenOrFiltered => "open|filtered",
         PortStatus::Unknown => "undetermined",
     };
-    let detail = result
-        .error
-        .as_deref()
-        .or(result.observation.as_deref())
-        .unwrap_or("-");
+    let detail = if let Some(error) = &result.error {
+        error.clone()
+    } else if let Some(data) = result.banner.as_deref().filter(|data| !data.is_empty()) {
+        let preview = format_preview(data);
+        match result
+            .observation
+            .as_deref()
+            .filter(|reason| !reason.is_empty())
+        {
+            Some(reason) => format!("{preview} ({reason})"),
+            None => preview,
+        }
+    } else {
+        result
+            .observation
+            .as_deref()
+            .filter(|text| !text.is_empty())
+            .unwrap_or("-")
+            .to_string()
+    };
     format!(
         "{:<9} {:<14} {:<9} {:>8.2} ms  {detail}",
         format!("{}/{}", result.port, result.transport.as_str()),
@@ -105,6 +120,29 @@ fn format_result(result: &ScanResult) -> String {
         result.service.as_deref().unwrap_or("-"),
         result.elapsed.as_secs_f64() * 1_000.0
     )
+}
+
+fn format_preview(data: &[u8]) -> String {
+    let data = data
+        .strip_suffix(b"\r\n")
+        .or_else(|| data.strip_suffix(b"\n"))
+        .unwrap_or(data);
+    let preview_len = data.len().min(64);
+    let preview = create_preview(&data[..preview_len], preview_len);
+    if data.len() > preview_len {
+        format!("{preview} (preview truncated)")
+    } else {
+        preview
+    }
+}
+
+fn create_preview(data: &[u8], preview_len: usize) -> String {
+    let preview: String = data[..preview_len]
+        .iter()
+        .flat_map(|byte| std::ascii::escape_default(*byte))
+        .map(char::from)
+        .collect();
+    preview
 }
 
 #[cfg(test)]

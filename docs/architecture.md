@@ -37,6 +37,7 @@ flowchart TD
 | `src/cli/config.rs` | Reserved for a future typed scan configuration |
 | `src/scan/mod.rs` | Dispatch TCP or UDP through one entry point |
 | `src/scan/tcp.rs` | TCP connection attempts, status classification, bounded passive reads, and SSH identification |
+| `src/scan/identify.rs` | Recognize supported banner formats and extract OpenSSH product, version, and optional comments |
 | `src/scan/http.rs` | HTTP `HEAD` probe on open TCP port 80 and `Server` header extraction |
 | `src/scan/udp.rs` | Sequential empty UDP probes, receive timeouts, and result collection |
 | `src/model/mod.rs` | Shared measured results, transport and status enums, and separate AI data |
@@ -50,7 +51,8 @@ flowchart TD
 
 - `ScanMode` selects TCP or UDP and supplies the protocol label used in reports and AI context.
 - `PortStatus` represents open, closed, tentative filtered, open or filtered, or undetermined outcomes.
-- `ScanResult` records the selected port and transport, outcome, elapsed time, optional service label, error, and observation.
+- `ServiceInformation` stores the identified protocol label, transport, optional product and version, and optional banner comments. Banner comments are separate from the read stop reason in `ScanResult.observation`.
+- `ScanResult` records the selected port and transport, outcome, elapsed time, optional service label, error, observation, and collected banner bytes. Passive banner bytes and the reason reading stopped are stored separately; reporting generates a bounded preview without changing the stored data.
 - `AiConfig` holds DeepSeek settings, a separate search key, the session timeout, and an optional local advisory path.
 - `AiAnalysis` contains generated interpretation, retrieved `WebSource` values, research notes, and optional local `CveCandidate` values.
 - `WebSource` holds a title, URL, and bounded snippet returned by a search request. It is evidence retrieved by the application independently of generated prose.
@@ -60,7 +62,7 @@ flowchart TD
 
 ## Measured outcomes and timing
 
-TCP elapsed time measures the initial connection attempt. Later passive reads and HTTP probes have their own waits and are excluded from that value. A refused connection is closed; a connection timeout is tentatively filtered. Successful connections remain open even when later banner collection fails. A complete supported SSH banner or valid HTTP response can supply a service label; other observations may retain an unknown service label.
+TCP elapsed time measures the initial connection attempt. Later passive reads and HTTP probes have their own waits and are excluded from that value. A refused connection is closed; a connection timeout is tentatively filtered. Successful connections remain open even when later banner collection fails. After a TCP result is assembled, the identification module examines its preserved banner. Complete supported SSH identification lines supply an `ssh` label, and the `OpenSSH_` software identifier supplies the product and version. Optional comments preserve distribution information. The extracted fields also enter AI context. Unknown SSH implementations retain a protocol label without guessed product/version fields. A valid HTTP probe response supplies an `http` label; other observations may retain an unknown service label.
 
 UDP uses a fresh socket bound to `0.0.0.0:0` for each selected port. UDP `connect` selects the remote peer and restricts incoming datagrams without a handshake. The scanner sends an empty datagram and waits for a response. A reply is open, an OS-reported refusal is closed, and receive timeout is open or filtered. Setup and other I/O errors remain undetermined. UDP elapsed time includes setup, sending, and receiving. Empty datagrams often receive no reply from services requiring protocol-specific requests; UDP service identification is not implemented.
 
@@ -77,3 +79,5 @@ Concurrency, host discovery, raw-packet scan methods, full service fingerprintin
 ## Tests
 
 Unit tests for private helpers live in `tests/cli/`, `tests/scan/`, `tests/model/`, and `tests/ai/`. The source modules include those files during test builds. Tests use fixtures for request construction, response parsing, status classification, banner matching, prompt context, and formatting. No live scan, search request, or AI request is needed for these checks.
+
+SSH identification parsing follows the line format documented in [RFC 4253, section 4.2](https://www.rfc-editor.org/rfc/rfc4253#section-4.2). The current parser requires a complete CRLF-terminated line and limits identification lines to 255 bytes. Protocol version (`2.0` or compatibility identifier `1.99`) is kept distinct from an OpenSSH software version such as `10.0p2`.
