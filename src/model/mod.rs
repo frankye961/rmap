@@ -1,6 +1,7 @@
 //! Structured scan measurements and separate AI analysis data.
 
 pub mod report;
+pub mod service_information;
 
 use std::time::Duration;
 

@@ -5,6 +5,7 @@ use std::time::Duration;
 use crate::model::{ScanMode, ScanResult};
 
 mod http;
+mod identify;
 mod tcp;
 mod udp;
 
