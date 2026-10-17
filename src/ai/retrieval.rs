@@ -4,6 +4,7 @@ use std::fs;
 use std::path::Path;
 
 use crate::model::{CveCandidate, PortStatus, ScanResult};
+use crate::utils::banner::banner_text;
 
 const MAX_FILE_BYTES: u64 = 1_048_576;
 const MAX_CANDIDATES: usize = 5;
@@ -53,11 +54,7 @@ fn retrieve_from_text(text: &str, results: &[ScanResult]) -> Vec<CveCandidate> {
             .iter()
             .filter(|result| result.status == PortStatus::Open)
         {
-            let banner_text = result
-                .banner
-                .as_deref()
-                .filter(|data| !data.is_empty())
-                .map(String::from_utf8_lossy);
+            let banner_text = banner_text(result.banner.as_deref());
             let observation = banner_text
                 .as_deref()
                 .or(result.observation.as_deref())

@@ -4,14 +4,14 @@ Current version: **0.3.0**.
 
 `rmap` aims to be a network scanner inspired by Nmap, written in Rust and extended with AI interpretation. Its goal is to find and describe exposed services, then help a user understand what observed service versions might mean, including possible CVE leads. Scan measurements and AI conclusions stay separate so the tool can show what it observed without presenting a model's guess as a fact.
 
-The current implementation scans selected TCP or UDP ports on one IPv4 address, collects limited banners, probes HTTP on port 80, and can ask DeepSeek to research public CVEs and exploit references using a web search tool. It does not yet offer Nmap's range of scan methods, host discovery, concurrent scanning, broad service fingerprinting, or exhaustive vulnerability detection. Building it is also a way to learn Rust networking, I/O, timeouts, and error handling.
+The current implementation concurrently scans selected TCP or UDP ports on one IPv4 address, collects limited banners, probes HTTP on port 80, and can ask DeepSeek to research public CVEs and exploit references using a web search tool. It does not yet offer Nmap's range of scan methods, host discovery, broad service fingerprinting, or exhaustive vulnerability detection. Building it is also a way to learn Rust networking, I/O, timeouts, and error handling.
 
 ## How a run works
 
-1. The CLI validates an IPv4 target, a scan mode (`--tcp` or `--udp`), a comma-separated list of ports, and a positive timeout.
-2. The common scanner entry point dispatches to the selected transport. UDP sends an empty datagram to each selected port and waits for a response. For each TCP port, the scanner attempts a TCP connection and records its elapsed connection time and outcome in a `ScanResult`.
+1. The CLI validates the required IPv4 target and any supplied options. Omitted options default to TCP, all ports from 1 through 65535, a timeout of 1000 ms, and up to 256 concurrent probes.
+2. The common scanner entry point schedules the selected transport through bounded Tokio tasks on a shared runtime. UDP sends an empty datagram to each selected port and waits for a response. For each TCP port, the scanner attempts a TCP connection and records its elapsed connection time and outcome in a `ScanResult`.
 3. On an open port other than 80, it reads a passive banner and stores the collected bytes separately from the reason reading stopped. On open port 80, it sends an HTTP `HEAD` probe using a separate connection.
-4. The report prints the measured results before any optional AI work.
+4. Progress is reported on stderr while ports are scanned. The measured table prints after scanning and before AI research. Full-range scans show only confirmed open ports; explicit `--ports` lists show every selected outcome. AI configuration is validated before scanning; configuration errors disable the AI step without stopping the scan.
 5. With `--ai`, the program sends bounded observations to DeepSeek through Rig. With a Brave Search key configured, the agent researches CVEs, vendor and distribution advisories, and Exploit-DB references using a public web search tool. An optional local advisory file can supplement the web evidence. Interpretation and retrieved source links appear separately from measurements. AI or search failures leave the scan report visible.
 
 The startup banner shows a crab, the tool name, and the program version.
@@ -48,21 +48,49 @@ Rig is pinned to version 0.42.0, and `Cargo.lock` records the resolved dependenc
 
 | Option | Meaning |
 | --- | --- |
-| `--tcp` | Run the TCP connect scanner |
+| `--tcp` | Run the TCP connect scanner; default when neither transport flag is supplied |
 | `--udp` | Send an empty UDP probe to each selected port and wait for a response |
 | `--target IPV4` | IPv4 address to scan; hostnames and IPv6 are not accepted |
-| `--ports PORT[,PORT...]` | Ports from 1 through 65535, scanned sequentially in the given order |
-| `--timeout-ms MILLISECONDS` | Positive timeout for a connection attempt and the later banner read or HTTP probe |
+| `--ports PORT[,PORT...]` | Optional list of ports, reported in the given order; omitting it selects all ports from 1 through 65535 |
+| `--timeout-ms MILLISECONDS` | Optional positive timeout for network operations; defaults to `1000` ms |
+| `--concurrency N` | Maximum simultaneous probes; defaults to `256`, accepts `1` through `1024` |
 | `--ai` | Request DeepSeek interpretation after the scan report |
 | `--help`, `-h` | Show command syntax without scanning |
 
-Exactly one of `--tcp` or `--udp` is required, together with the target, ports, and timeout options. The modes cannot be combined. Invalid input stops the run before any connection attempt.
+Only `--target` is required. Without a transport flag, rmap uses TCP. Without `--ports`, it selects ports 1–65535. Without `--timeout-ms`, it uses 1000 ms. Transport flags cannot be combined or repeated. Explicit `--ports` and `--timeout-ms` flags still require valid, nonempty values; invalid input stops the run before any connection attempt.
+
+The minimal command scans all TCP ports with a 1000 ms timeout:
+
+```bash
+rmap --target 192.0.2.21
+```
 
 To scan UDP ports:
 
 ```bash
 rmap --udp --target 127.0.0.1 --ports 53 --timeout-ms 1000
 ```
+
+Omit `--ports` to scan the full range, from port 1 through 65535, reported in ascending order:
+
+```bash
+rmap --tcp --target 192.0.2.21 --timeout-ms 1000
+```
+
+`192.0.2.21` is a documentation address; substitute your authorized target. The same default applies to `--udp`. Scanning uses up to 256 concurrent probes by default for both TCP and UDP, including explicit port lists. Startup output shows the port count, timeout, and concurrency limit; progress reports completed ports, percentage, last port and elapsed time. Tasks report completions immediately, while the final table retains the requested port order. Actual duration depends on network responses, banner waits, and available system resources. Use an explicit `--ports` list for a short scan. With `--ai`, research starts after the full scan completes and still uses at most eight measured outcomes, prioritizing open ports.
+
+Tune the concurrency limit with `--concurrency`; `1` restores sequential scanning:
+
+```bash
+rmap --target 192.0.2.21 --concurrency 256
+rmap --target 192.0.2.21 --ports 22,80,443 --concurrency 1
+```
+
+Higher limits are not always faster: socket limits, packet loss, and target rate limiting can increase errors or timeouts. Lower the limit if these occur. The limit includes connection, banner, and HTTP probe waits; rmap uses asynchronous TCP/UDP sockets and runs only the configured number of active tasks on a shared, single-thread Tokio runtime. Waiting for a network response does not occupy a dedicated OS thread. Tokio was already a dependency; networking, I/O, and synchronization features are now enabled.
+
+When `--ports` is omitted, the table shows only ports measured as `open`, plus the number shown and total scanned. This includes UDP only when a response was received; silent `open|filtered` ports are hidden. If none are open, an explicit message says so. Hidden rows remain in the measured result collection and can still enter the bounded AI context. Explicit `--ports` lists continue to display every outcome, including closed, filtered, uncertain, and error results.
+
+Async reduces thread overhead; it does not shorten the configured timeout or bypass network and socket limits. The default concurrency remains 256 and the maximum remains 1024.
 
 ## Understanding scan results
 
@@ -335,16 +363,24 @@ src/
 ├── main.rs             Entry point and orchestration
 ├── cli/
 │   ├── mod.rs          Argument parsing and validation
-│   └── config.rs       Reserved for a typed scan configuration
+│   └── config.rs       Validated CLI configuration
 ├── scan/
-│   ├── mod.rs          Common entry point and transport dispatch
+│   ├── mod.rs          Target validation and concurrent dispatch
+│   ├── worker.rs       Bounded async tasks and ordered result collection
 │   ├── tcp.rs          TCP connections, outcomes, and passive banners
 │   ├── identify.rs     Banner recognition and OpenSSH product/version parsing
-│   ├── udp.rs          Sequential UDP probes and outcome classification
+│   ├── udp.rs          UDP probes and outcome classification
 │   └── http.rs         HTTP HEAD probe for open port 80
 ├── model/
 │   ├── mod.rs          Scan results, preserved banner bytes, and AI data
+│   ├── progress.rs     Scan startup and throttled progress on stderr
 │   └── report.rs       Safe banner previews and terminal report rendering
+├── mapper/
+│   ├── mod.rs          Model mapping modules
+│   └── service_information.rs  Construct and apply service information
+├── utils/
+│   ├── mod.rs          Shared utility modules
+│   └── banner.rs       Complete lines, byte escaping, and banner text
 └── ai/
     ├── mod.rs          AI modules
     ├── config.rs       DeepSeek settings and local .env loading

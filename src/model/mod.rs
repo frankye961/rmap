@@ -1,10 +1,14 @@
 //! Structured scan measurements and separate AI analysis data.
 
+pub mod progress;
 pub mod report;
 pub mod service_information;
 
 use self::service_information::ServiceInformation;
 use std::time::Duration;
+
+pub const DEFAULT_CONCURRENCY: usize = 256;
+pub const MAX_CONCURRENCY: usize = 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ScanMode {

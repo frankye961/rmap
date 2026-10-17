@@ -1,77 +1,62 @@
-//! Sequential UDP probes with bounded waits and uncertain timeout classification.
+//! One UDP probe with a bounded wait and uncertain timeout classification.
 
 use std::io::{self, ErrorKind};
-use std::net::{SocketAddr, UdpSocket};
+use std::net::SocketAddr;
+
 use std::time::{Duration, Instant};
+use tokio::net::UdpSocket;
 
 use crate::model::{PortStatus, ScanMode, ScanResult};
+use crate::utils::banner::escape_bytes;
 
-pub fn scan(address: String, timeout: Duration, ports: &[&str]) -> Result<Vec<ScanResult>, String> {
-    if timeout.is_zero() {
-        return Err("UDP timeout must be greater than zero".into());
-    }
-    // Validate all targets before sending any probes.
-    let targets = ports
-        .iter()
-        .map(|port| {
-            format!("{address}:{port}")
-                .parse::<SocketAddr>()
-                .map_err(|error| format!("Invalid UDP target {address}:{port}: {error}"))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let mut results = Vec::new();
-    for target in targets {
-        let started = Instant::now();
-        let mut result = ScanResult {
-            port: target.port(),
-            transport: ScanMode::Udp,
-            status: PortStatus::Unknown,
-            service: None,
-            elapsed: Duration::ZERO,
-            error: None,
-            observation: None,
-            banner: None,
-            service_information: None,
-        };
-        match probe(target, timeout) {
-            Ok((status, observation)) => {
-                result.status = status;
-                result.observation = Some(observation);
-            }
-            Err(error) => result.error = Some(error),
+pub(super) async fn scan_port(target: SocketAddr, timeout: Duration) -> ScanResult {
+    let started = Instant::now();
+    let mut result = ScanResult {
+        port: target.port(),
+        transport: ScanMode::Udp,
+        status: PortStatus::Unknown,
+        service: None,
+        elapsed: Duration::ZERO,
+        error: None,
+        observation: None,
+        banner: None,
+        service_information: None,
+    };
+    match probe(target, timeout).await {
+        Ok((status, observation)) => {
+            result.status = status;
+            result.observation = Some(observation);
         }
-        result.elapsed = started.elapsed();
-        results.push(result);
+        Err(error) => result.error = Some(error),
     }
-    Ok(results)
+    result.elapsed = started.elapsed();
+    result
 }
 
-fn probe(target: SocketAddr, timeout: Duration) -> Result<(PortStatus, String), String> {
+async fn probe(target: SocketAddr, timeout: Duration) -> Result<(PortStatus, String), String> {
     let socket = UdpSocket::bind("0.0.0.0:0")
+        .await
         .map_err(|error| format!("Failed to bind local UDP socket: {error}"))?;
-    socket
-        .set_read_timeout(Some(timeout))
-        .and_then(|()| socket.set_write_timeout(Some(timeout)))
-        .map_err(|error| format!("Failed to set UDP timeout: {error}"))?;
     // UDP connect selects a peer and filters incoming datagrams; it sends no handshake.
     socket
         .connect(target)
+        .await
         .map_err(|error| format!("Failed to select UDP target: {error}"))?;
-    socket
-        .send(&[])
+    tokio::time::timeout(timeout, socket.send(&[]))
+        .await
+        .map_err(|_| "UDP send timed out".to_string())?
         .map_err(|error| format!("Failed to send UDP probe: {error}"))?;
     let mut buffer = [0u8; 1024];
-    Ok(classify_response(socket.recv(&mut buffer), &buffer))
+    let response = tokio::time::timeout(timeout, socket.recv(&mut buffer))
+        .await
+        .unwrap_or_else(|_| Err(io::Error::from(ErrorKind::TimedOut)));
+    Ok(classify_response(response, &buffer))
 }
 
 fn classify_response(response: io::Result<usize>, buffer: &[u8]) -> (PortStatus, String) {
     match response {
         Ok(size) => {
-            let preview: String = buffer[..size.min(64)]
-                .iter()
-                .flat_map(|byte| std::ascii::escape_default(*byte))
-                .map(char::from)
-                .collect();
+            let preview = escape_bytes(&buffer[..size], 64);
             let detail = if size == 0 {
                 "empty UDP response".into()
             } else if size >= buffer.len() {

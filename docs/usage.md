@@ -18,7 +18,15 @@ Cargo's installation directory, usually `~/.cargo/bin`, must be on `PATH`. Reins
 
 ## Select TCP or UDP
 
-Exactly one of `--tcp` and `--udp` is required. Provide a numeric IPv4 target, comma-separated ports from 1 through 65535, and a positive timeout in milliseconds. Hostnames and IPv6 are not accepted. Ports are scanned sequentially in the supplied order.
+Only a numeric IPv4 `--target` is required. Omit the transport flags to use TCP, or select `--udp` explicitly. The flags cannot be combined or repeated. Omit `--timeout-ms` to use 1000 milliseconds, or supply a positive integer to override it. Optionally select comma-separated ports from 1 through 65535 with `--ports`. Omitting `--ports` selects all 65535 ports in ascending order. An explicitly empty value or a `--ports` flag without a value is rejected. Hostnames and IPv6 are not accepted. TCP and UDP probes run concurrently, with up to 256 active async probes by default. The final report preserves the supplied port order, regardless of completion order.
+
+The minimal command uses TCP, ports 1–65535, and a 1000 ms timeout:
+
+```bash
+rmap --target 192.0.2.21
+```
+
+Defaults apply when options are omitted. An explicit empty, zero, or missing timeout value is rejected, as is a literal `null` value.
 
 The following examples use a documentation address. Replace it with a target you are authorized to scan.
 
@@ -26,6 +34,25 @@ The following examples use a documentation address. Replace it with a target you
 rmap --tcp --target 192.0.2.21 --ports 80,22,21,8080,443,111,139,445,2409,8000 --timeout-ms 1000
 rmap --udp --target 192.0.2.21 --ports 53,123,161 --timeout-ms 1000
 ```
+
+To select the entire port range for either transport, leave out `--ports`:
+
+```bash
+rmap --tcp --target 192.0.2.21 --timeout-ms 1000
+rmap --udp --target 192.0.2.21 --timeout-ms 1000
+```
+
+Full-range scans use the same bounded Tokio task scheduler as explicit port lists. Startup output confirms the selected count, timeout, and concurrency limit. Progress is shown on stderr, refreshed about once per second in a terminal or every five seconds when redirected, and again at completion. The final measured table follows the scan. Adding `--ai` runs research after the whole scan; it does not increase the eight-observation limit for AI context.
+
+Use `--concurrency N` to set the maximum active probes from 1 through 1024; the default is 256. Setting it to 1 runs sequentially. The limit covers connection attempts and banner/probe waits. Tasks share a single-thread Tokio runtime with asynchronous sockets, so waiting probes do not need individual OS threads. Only the configured number of tasks is scheduled at once. Missing, repeated, zero, and out-of-range values are rejected before scanning.
+
+```bash
+rmap --target 192.0.2.21 --concurrency 256
+```
+
+More concurrent probes do not guarantee better performance. Network latency, banner waits, socket limits, and target rate limiting affect speed and observed timeouts. Reduce concurrency when resource errors or excessive timeouts appear.
+
+When `--ports` is omitted, only confirmed `open` ports are printed in the measured table. UDP `open|filtered` rows are hidden. The report gives the number of open ports shown and total scanned, or says no open ports were found. This filters presentation only: all outcomes remain available for progress and bounded AI context. With an explicit `--ports` list, every selected outcome is displayed.
 
 TCP connects and then collects a passive banner, or sends an HTTP `HEAD` probe on open port 80. UDP sends an empty datagram; protocol-specific UDP requests and service identification are not implemented. A UDP timeout is reported as `open|filtered` because a listening service may ignore that datagram.
 
@@ -48,7 +75,7 @@ The values above are placeholders. Keys are separate credentials for separate HT
 rmap --tcp --target 192.0.2.21 --ports 80,22,21,8080,443,111,139,445,2409,8000 --timeout-ms 1000 --ai
 ```
 
-The measured report prints before any AI work. DeepSeek can identify product/version text in observations, search for CVEs and affected versions, and look for public Exploit-DB references. The report displays its interpretation, actual retrieved source links, and research notices separately. Search snippets and model judgments are not confirmation of vulnerability or exploit applicability. The program does not download or execute exploit code.
+AI settings are validated before scanning so configuration errors are visible early. Such errors disable only the AI phase. The measured report prints before any model or web research requests; a separate status message announces the start of the AI phase and its session timeout. DeepSeek can identify product/version text in observations, search for CVEs and affected versions, and look for public Exploit-DB references. The report displays its interpretation, actual retrieved source links, and research notices separately. Search snippets and model judgments are not confirmation of vulnerability or exploit applicability. The program does not download or execute exploit code.
 
 Research is bounded to eight observed outcomes, six search calls, four results per search, and eight model calls. Open ports receive priority in the observation limit. A scan of more ports can therefore display measurements that do not reach the AI prompt. The total AI timeout includes tool and model calls; increase an existing 15000 ms setting when needed for research.
 
@@ -59,6 +86,8 @@ See the [README's recorded TCP run](../README.md#example-tcp-scan-with-ai-resear
 | Symptom | What to check |
 | --- | --- |
 | `rmap: command not found` | Install with Cargo and add its binary directory to `PATH` |
+| Scan appears stuck after the banner | Check the startup port count and progress; omitted `--ports` means all 65535 ports. Use a smaller explicit list for a quick scan |
+| Waiting after measured results appear | With `--ai`, the separate research phase can run until `RMAP_AI_TIMEOUT_MS` expires |
 | Old behavior after rebuilding | Reinstall, or run `./target/release/rmap` directly |
 | Search key reported missing | Use the exact name `RMAP_SEARCH_API_KEY`, save the file as `.env`, and launch from the directory containing it |
 | Only a DeepSeek key is configured | Add the separate Brave Search key for public web research |
