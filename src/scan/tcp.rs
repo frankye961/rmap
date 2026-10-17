@@ -26,15 +26,15 @@ pub fn scan(address: String, timeout: Duration, ports: &[&str]) -> Vec<ScanResul
 
         let result = match connection {
             Ok(stream) => {
-                let (service, observation) = if target.port() == 80 {
+                let (service, observation, banner) = if target.port() == 80 {
                     drop(stream);
                     match http::probe(target, timeout) {
-                        Ok(response) => (Some("http".to_string()), response),
-                        Err(error) => (None, Some(format!("HTTP probe failed: {error}"))),
+                        Ok(response) => (Some("http".to_string()), response, None),
+                        Err(error) => (None, Some(format!("HTTP probe failed: {error}")), None),
                     }
                 } else {
-                    let (service, observation) = handle_connection(stream, timeout);
-                    (service, Some(observation))
+                    let (service, observation, banner) = handle_connection(stream, timeout);
+                    (service, Some(observation), banner)
                 };
                 ScanResult {
                     port: target.port(),
@@ -44,6 +44,7 @@ pub fn scan(address: String, timeout: Duration, ports: &[&str]) -> Vec<ScanResul
                     elapsed,
                     error: None,
                     observation,
+                    banner,
                 }
             }
             Err(error) => {
@@ -60,6 +61,7 @@ pub fn scan(address: String, timeout: Duration, ports: &[&str]) -> Vec<ScanResul
                     elapsed,
                     error: Some(error.to_string()),
                     observation: None,
+                    banner: None,
                 }
             }
         };
@@ -69,7 +71,10 @@ pub fn scan(address: String, timeout: Duration, ports: &[&str]) -> Vec<ScanResul
     results
 }
 
-fn handle_connection(mut stream: TcpStream, timeout: Duration) -> (Option<String>, String) {
+fn handle_connection(
+    mut stream: TcpStream,
+    timeout: Duration,
+) -> (Option<String>, String, Option<Vec<u8>>) {
     let mut buffer = [0; 512];
     let mut collected = Vec::new();
     let start = Instant::now();
@@ -107,34 +112,14 @@ fn calculate_remaning_timeout(started: Instant, timeout: Duration) -> Duration {
     }
 }
 
-fn format_preview(data: &[u8]) -> String {
-    let data = data
-        .strip_suffix(b"\r\n")
-        .or_else(|| data.strip_suffix(b"\n"))
-        .unwrap_or(data);
-    let preview_len = data.len().min(64);
-    let preview = create_preview(&data[..preview_len], preview_len);
-    if data.len() > preview_len {
-        format!("{preview} (preview truncated)")
-    } else {
-        preview
-    }
-}
-
-fn banner_result(data: &[u8], stop_reason: &str) -> (Option<String>, String) {
+fn banner_result(data: &[u8], stop_reason: &str) -> (Option<String>, String, Option<Vec<u8>>) {
     let service = identify_ssh(data);
-    let observation = if data.is_empty() {
-        if stop_reason.is_empty() {
-            "no banner received".to_string()
-        } else {
-            stop_reason.to_string()
-        }
-    } else if stop_reason.is_empty() {
-        format_preview(data)
+    let observation = if data.is_empty() && stop_reason.is_empty() {
+        "no banner received".to_string()
     } else {
-        format!("{} ({stop_reason})", format_preview(data))
+        stop_reason.to_string()
     };
-    (service, observation)
+    (service, observation, Some(data.to_vec()))
 }
 
 fn identify_ssh(data: &[u8]) -> Option<String> {
@@ -142,15 +127,6 @@ fn identify_ssh(data: &[u8]) -> Option<String> {
         .filter(|line| line.ends_with(b"\r\n"))
         .any(|line| line.starts_with(b"SSH-2.0-") || line.starts_with(b"SSH-1.99-"))
         .then(|| "ssh".to_string())
-}
-
-fn create_preview(data: &[u8], preview_len: usize) -> String {
-    let preview: String = data[..preview_len]
-        .iter()
-        .flat_map(|byte| std::ascii::escape_default(*byte))
-        .map(char::from)
-        .collect();
-    preview
 }
 
 #[cfg(test)]

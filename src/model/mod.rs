@@ -28,6 +28,7 @@ pub struct ScanResult {
     pub elapsed: Duration,
     pub error: Option<String>,
     pub observation: Option<String>,
+    pub banner: Option<Vec<u8>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

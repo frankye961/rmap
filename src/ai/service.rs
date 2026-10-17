@@ -122,9 +122,14 @@ fn build_prompt(results: &[ScanResult], candidates: &[CveCandidate]) -> String {
         )
         .take(8)
     {
-        let detail: String = result
-            .observation
+        let banner_text = result
+            .banner
             .as_deref()
+            .filter(|data| !data.is_empty())
+            .map(String::from_utf8_lossy);
+        let detail: String = banner_text
+            .as_deref()
+            .or(result.observation.as_deref())
             .or(result.error.as_deref())
             .unwrap_or("no response")
             .chars()
@@ -138,6 +143,18 @@ fn build_prompt(results: &[ScanResult], candidates: &[CveCandidate]) -> String {
             result.service.as_deref().unwrap_or("unknown"),
             detail.replace(['\r', '\n'], " ")
         ));
+        if banner_text.is_some()
+            && let Some(reason) = result
+                .observation
+                .as_deref()
+                .filter(|reason| !reason.is_empty())
+        {
+            let reason: String = reason.chars().take(160).collect();
+            prompt.push_str(&format!(
+                "  Read outcome: {}\n",
+                reason.replace(['\r', '\n'], " ")
+            ));
+        }
     }
     prompt.push_str("\nRetrieved advisory candidates (exact version string matches; not proof of vulnerability):\n");
     if candidates.is_empty() {

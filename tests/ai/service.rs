@@ -38,6 +38,7 @@ fn udp_observations_keep_their_transport() {
         elapsed: Duration::ZERO,
         error: None,
         observation: Some("response".into()),
+        banner: None,
     };
     let prompt = super::build_prompt(&[result], &[]);
     assert!(prompt.contains("53/udp"));
@@ -59,10 +60,34 @@ fn closed_and_uncertain_ports_are_still_measured_observations() {
             elapsed: Duration::from_secs(1),
             error: None,
             observation: Some("probe outcome".into()),
+            banner: None,
         })
         .collect();
     let prompt = super::build_prompt(&results, &[]);
     assert!(prompt.contains("80/udp: state Closed"));
     assert!(prompt.contains("21/udp: state OpenOrFiltered"));
     assert!(!prompt.contains("Do not name any CVE"));
+}
+
+#[test]
+fn research_reads_banner_beyond_console_preview_and_keeps_stop_reason() {
+    use crate::model::{PortStatus, ScanMode, ScanResult};
+    use std::time::Duration;
+
+    let mut bytes = vec![b' '; 70];
+    bytes.extend_from_slice(b"220 (vsFTPd 3.0.5)");
+    let result = ScanResult {
+        port: 21,
+        transport: ScanMode::Tcp,
+        status: PortStatus::Open,
+        service: None,
+        elapsed: Duration::ZERO,
+        error: None,
+        observation: Some("read timed out".into()),
+        banner: Some(bytes),
+    };
+    let prompt = super::build_prompt(&[result], &[]);
+    assert!(prompt.contains("vsFTPd 3.0.5"));
+    assert!(prompt.contains("Read outcome: read timed out"));
+    assert!(!prompt.contains("preview truncated"));
 }

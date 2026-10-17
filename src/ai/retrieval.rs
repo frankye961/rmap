@@ -53,9 +53,14 @@ fn retrieve_from_text(text: &str, results: &[ScanResult]) -> Vec<CveCandidate> {
             .iter()
             .filter(|result| result.status == PortStatus::Open)
         {
-            let observation = result
-                .observation
+            let banner_text = result
+                .banner
                 .as_deref()
+                .filter(|data| !data.is_empty())
+                .map(String::from_utf8_lossy);
+            let observation = banner_text
+                .as_deref()
+                .or(result.observation.as_deref())
                 .unwrap_or("")
                 .to_ascii_lowercase();
             if contains_exact_version(&observation, &slash)

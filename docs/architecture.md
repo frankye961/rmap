@@ -50,7 +50,7 @@ flowchart TD
 
 - `ScanMode` selects TCP or UDP and supplies the protocol label used in reports and AI context.
 - `PortStatus` represents open, closed, tentative filtered, open or filtered, or undetermined outcomes.
-- `ScanResult` records the selected port and transport, outcome, elapsed time, optional service label, error, and observation.
+- `ScanResult` records the selected port and transport, outcome, elapsed time, optional service label, error, observation, and collected banner bytes. Passive banner bytes and the reason reading stopped are stored separately; reporting generates a bounded preview without changing the stored data.
 - `AiConfig` holds DeepSeek settings, a separate search key, the session timeout, and an optional local advisory path.
 - `AiAnalysis` contains generated interpretation, retrieved `WebSource` values, research notes, and optional local `CveCandidate` values.
 - `WebSource` holds a title, URL, and bounded snippet returned by a search request. It is evidence retrieved by the application independently of generated prose.
