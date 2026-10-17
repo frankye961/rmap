@@ -3,6 +3,7 @@
 pub mod report;
 pub mod service_information;
 
+use self::service_information::ServiceInformation;
 use std::time::Duration;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

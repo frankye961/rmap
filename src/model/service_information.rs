@@ -1,9 +1,11 @@
-#[derive(Debug)]
+use crate::model::ScanMode;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServiceInformation {
-    pub port: u16,
     pub transport: ScanMode,
     pub service: Option<String>,
-    pub banner: Option<Vec<u8>>,
+    /// Optional comments advertised in the identification line, not the read stop reason.
     pub observation: Option<String>,
-    pub ai_analysis: Option<AiAnalysis>,
+    pub product: Option<String>,
+    pub version: Option<String>,
 }

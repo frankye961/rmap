@@ -39,6 +39,7 @@ fn udp_observations_keep_their_transport() {
         error: None,
         observation: Some("response".into()),
         banner: None,
+        service_information: None,
     };
     let prompt = super::build_prompt(&[result], &[]);
     assert!(prompt.contains("53/udp"));
@@ -61,6 +62,7 @@ fn closed_and_uncertain_ports_are_still_measured_observations() {
             error: None,
             observation: Some("probe outcome".into()),
             banner: None,
+            service_information: None,
         })
         .collect();
     let prompt = super::build_prompt(&results, &[]);
@@ -85,9 +87,38 @@ fn research_reads_banner_beyond_console_preview_and_keeps_stop_reason() {
         error: None,
         observation: Some("read timed out".into()),
         banner: Some(bytes),
+        service_information: None,
     };
     let prompt = super::build_prompt(&[result], &[]);
     assert!(prompt.contains("vsFTPd 3.0.5"));
     assert!(prompt.contains("Read outcome: read timed out"));
     assert!(!prompt.contains("preview truncated"));
+}
+
+#[test]
+fn includes_structured_ssh_software_and_version_in_research_context() {
+    use crate::model::service_information::ServiceInformation;
+    use crate::model::{PortStatus, ScanMode, ScanResult};
+    use std::time::Duration;
+
+    let result = ScanResult {
+        port: 2222,
+        transport: ScanMode::Tcp,
+        status: PortStatus::Open,
+        service: Some("ssh".into()),
+        elapsed: Duration::ZERO,
+        error: None,
+        observation: Some("peer closed connection".into()),
+        banner: Some(b"SSH-2.0-OpenSSH_10.0p2 Debian-7+deb13u4\r\n".to_vec()),
+        service_information: Some(ServiceInformation {
+            transport: ScanMode::Tcp,
+            service: Some("ssh".into()),
+            product: Some("OpenSSH".into()),
+            version: Some("10.0p2".into()),
+            observation: Some("Debian-7+deb13u4".into()),
+        }),
+    };
+    let prompt = super::build_prompt(&[result], &[]);
+    assert!(prompt.contains("product OpenSSH; version 10.0p2; comments Debian-7+deb13u4"));
+    assert!(prompt.contains("Read outcome: peer closed connection"));
 }

@@ -14,6 +14,7 @@ fn reports_transport_uncertainty_and_elapsed_time() {
         error: None,
         observation: Some("no response".into()),
         banner: None,
+        service_information: None,
     };
     let line = format_result(&result);
     assert!(line.starts_with("53/udp"));
@@ -39,6 +40,7 @@ fn shows_safe_banner_preview_and_preserves_full_bytes_and_stop_reason() {
         error: None,
         observation: Some("read timed out".into()),
         banner: Some(bytes.clone()),
+        service_information: None,
     };
     let line = format_result(&result);
     assert!(line.contains("\\x1bSSH-2.0-"));
@@ -58,6 +60,7 @@ fn strips_banner_line_ending_without_quotes_or_empty_reason() {
         error: None,
         observation: Some(String::new()),
         banner: Some(b"SSH-2.0-OpenSSH_10.0\r\n".to_vec()),
+        service_information: None,
     };
     assert!(format_result(&result).ends_with("SSH-2.0-OpenSSH_10.0"));
 }

@@ -31,6 +31,7 @@ pub fn scan(address: String, timeout: Duration, ports: &[&str]) -> Result<Vec<Sc
             error: None,
             observation: None,
             banner: None,
+            service_information: None,
         };
         match probe(target, timeout) {
             Ok((status, observation)) => {

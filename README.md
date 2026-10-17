@@ -76,7 +76,7 @@ Each report row includes the port, connection state, an optional service label, 
 | `open\|filtered` | No UDP response arrived before the read timeout; an open service may silently ignore the probe. |
 | `undetermined` | Another socket or I/O error prevented classification. |
 
-For most open TCP ports, the scanner passively reads up to 512 bytes, stopping at a newline, a read timeout, a closed connection, or the byte limit. `ScanResult.banner` preserves the collected bytes, while `observation` records the stop reason separately. A complete SSH identification line gives the port an `ssh` service label. Other banners are retained even when the service is unknown.
+For most open TCP ports, the scanner passively reads up to 512 bytes, stopping at a newline, a read timeout, a closed connection, or the byte limit. `ScanResult.banner` preserves the collected bytes, while `observation` records the stop reason separately. A complete supported SSH identification line gives the port an `ssh` service label. For OpenSSH, identification also stores the product, software version, and optional distribution comments separately; for example, `OpenSSH`, `10.0p2`, and `Debian-7+deb13u4`. Unknown SSH implementations retain an `ssh` label without guessed product/version fields. Other banners are retained even when the service is unknown.
 
 Reporting creates a printable preview from at most 64 banner bytes, escapes control bytes, and removes a trailing line ending. Longer banners receive a truncation marker. When reading stops after receiving some data, the report includes both the preview and the stop reason, such as `partial banner (read timed out)`. Creating this preview does not shorten or modify the stored bytes.
 
@@ -339,6 +339,7 @@ src/
 ├── scan/
 │   ├── mod.rs          Common entry point and transport dispatch
 │   ├── tcp.rs          TCP connections, outcomes, and passive banners
+│   ├── identify.rs     Banner recognition and OpenSSH product/version parsing
 │   ├── udp.rs          Sequential UDP probes and outcome classification
 │   └── http.rs         HTTP HEAD probe for open port 80
 ├── model/

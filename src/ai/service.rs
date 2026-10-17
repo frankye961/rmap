@@ -143,6 +143,16 @@ fn build_prompt(results: &[ScanResult], candidates: &[CveCandidate]) -> String {
             result.service.as_deref().unwrap_or("unknown"),
             detail.replace(['\r', '\n'], " ")
         ));
+        if let Some(information) = &result.service_information {
+            prompt.push_str(&format!(
+                "  Banner identification: {}/{}; product {}; version {}; comments {}\n",
+                information.transport.as_str(),
+                information.service.as_deref().unwrap_or("unknown"),
+                information.product.as_deref().unwrap_or("unknown"),
+                information.version.as_deref().unwrap_or("unknown"),
+                information.observation.as_deref().unwrap_or("none")
+            ));
+        }
         if banner_text.is_some()
             && let Some(reason) = result
                 .observation
