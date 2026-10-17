@@ -30,6 +30,7 @@ pub struct ScanResult {
     pub error: Option<String>,
     pub observation: Option<String>,
     pub banner: Option<Vec<u8>>,
+    pub service_information: Option<ServiceInformation>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
