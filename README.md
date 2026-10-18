@@ -1,10 +1,10 @@
 # rmap (ALPHA version)
 
-Current version: **0.4.3**.
+Current version: **0.4.4**.
 
 `rmap` aims to be a network scanner inspired by Nmap, written in Rust and extended with AI interpretation. Its goal is to find and describe exposed services, then help a user understand what observed service versions might mean, including possible CVE leads. Scan measurements and AI conclusions stay separate so the tool can show what it observed without presenting a model's guess as a fact.
 
-The current implementation scans one or more IPv4 targets, with concurrent TCP or UDP probes within each host, collects limited banners, probes HTTP on port 80, and can ask DeepSeek to research public CVEs and exploit references using a web search tool. It does not yet offer Nmap's range of scan methods, host discovery, broad service fingerprinting, or exhaustive vulnerability detection. Building it is also a way to learn Rust networking, I/O, timeouts, and error handling.
+The current implementation accepts individual IPv4 addresses, target lists, and CIDR subnets. It scans each unique host once, probes its selected TCP or UDP ports concurrently, collects limited banners, probes HTTP on port 80, and can ask DeepSeek to research public CVEs and exploit references using a web search tool. It does not yet offer Nmap's range of scan methods, host discovery, broad service fingerprinting, or exhaustive vulnerability detection. Building it is also a way to learn Rust networking, I/O, timeouts, and error handling.
 
 ## How a run works
 
@@ -52,7 +52,28 @@ rmap --target 192.0.2.10,192.0.2.11,192.0.2.10 --ports 22,80-82
 
 This scans `192.0.2.10` once, then `192.0.2.11` once. Each host gets its own progress, measured report, and optional AI interpretation. All target entries are validated before scanning; invalid addresses and empty entries are rejected. Hosts run sequentially, while the configured concurrency applies to ports within the current host. With `--ai`, each unique host has a separate research session, timeout, and search budget; observations from different hosts are not combined.
 
-The existing single-address syntax still works. CIDR subnet expansion and simultaneous host scanning are not implemented. A scan-level error terminates the run; an AI analysis failure is reported without preventing the next host’s scan.
+The existing single-address syntax still works. IPv4 CIDR subnets can be mixed with individual addresses; simultaneous host scanning is not implemented. A scan-level error terminates the run; an AI analysis failure is reported without preventing the next host’s scan.
+
+### CIDR subnet targets
+
+```bash
+rmap --target 192.0.2.0/30,192.0.2.10 --ports 22,80,443
+```
+
+This selects `192.0.2.1`, `192.0.2.2`, and `192.0.2.10`. CIDR entries expand in ascending address order, with duplicates removed across addresses and overlapping subnets. Host bits in an input such as `192.0.2.3/30` are normalized to the containing subnet before expansion.
+
+Prefixes must be from 0 through 32. For `/0` through `/30`, network and broadcast addresses are excluded; `/31` includes both addresses, and `/32` includes one address. At most **4,096 unique targets** are accepted across the whole list. Oversized subnets are rejected before expansion, and the combined list is checked while deduplicating, before any scan starts. Thus `/0` is valid CIDR syntax but exceeds the target limit. No host discovery is performed: each selected address enters the existing scan loop.
+
+Examples of CIDR address selection:
+
+| Target | Selected addresses |
+| --- | --- |
+| `192.0.2.3/30` | `192.0.2.1`, `192.0.2.2` |
+| `192.0.2.1/31` | `192.0.2.0`, `192.0.2.1` |
+| `192.0.2.10/32` | `192.0.2.10` |
+| `192.0.2.2,192.0.2.0/30` | `192.0.2.2`, `192.0.2.1`, each once |
+
+Subnet selection does not imply that every selected address is online. An address that does not respond still receives normal port-attempt results; CIDR expansion itself makes no network calls.
 
 ### CLI options
 
@@ -60,7 +81,7 @@ The existing single-address syntax still works. CIDR subnet expansion and simult
 | --- | --- |
 | `--tcp` | Run the TCP connect scanner; default when neither transport flag is supplied |
 | `--udp` | Send an empty UDP probe to each selected port and wait for a response |
-| `--target IPV4[,IPV4...]` | One or more comma-separated IPv4 addresses; duplicates are scanned once, in first-occurrence order; hostnames, IPv6, and CIDR are not accepted |
+| `--target TARGET[,TARGET...]` | IPv4 addresses and CIDR subnets; at most 4,096 unique targets, deduplicated in first-occurrence order; hostnames and IPv6 are not accepted |
 | `--ports LIST` | Comma-separated ports and inclusive ranges, such as `22,80-82,443`; omitting it selects all ports from 1 through 65535 |
 | `--exclude-ports LIST` | Ports and inclusive ranges to remove from an earlier explicit `--ports` list; may be given once and must leave at least one selected port |
 | `--timeout-ms MILLISECONDS` | Optional positive timeout for network operations; defaults to `1000` ms |

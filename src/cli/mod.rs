@@ -9,7 +9,9 @@ pub use config::CliConfig;
 
 use crate::model::{DEFAULT_CONCURRENCY, MAX_CONCURRENCY, ScanMode};
 
-pub const USAGE: &str = "Usage: rmap --target IPV4[,IPV4...] [--tcp | --udp] [--ports LIST] [--exclude-ports LIST] [--timeout-ms MILLISECONDS] [--concurrency N] [--ai]\nDefaults: TCP, all ports from 1 to 65535, timeout 1000 ms, concurrency 256 (1-1024).\nFull-range scans and --ports lists containing ranges show only open ports; individual-port lists show all outcomes.\nPort lists accept individual ports and inclusive ranges, e.g. 22,80-82,443.\nTargets are scanned once each, in first-occurrence order.\n--exclude-ports requires an earlier --ports list and must leave at least one port.";
+const MAX_TARGETS: usize = 4096;
+
+pub const USAGE: &str = "Usage: rmap --target TARGET[,TARGET...] [--tcp | --udp] [--ports LIST] [--exclude-ports LIST] [--timeout-ms MILLISECONDS] [--concurrency N] [--ai]\nDefaults: TCP, all ports from 1 to 65535, timeout 1000 ms, concurrency 256 (1-1024).\nFull-range scans and --ports lists containing ranges show only open ports; individual-port lists show all outcomes.\nPort lists accept individual ports and inclusive ranges, e.g. 22,80-82,443.\nTargets accept IPv4 addresses and CIDR subnets; at most 4096 unique targets. Targets are scanned once each, in first-occurrence order.\n--exclude-ports requires an earlier --ports list and must leave at least one port.";
 
 pub fn parse_cli(args: &[String]) -> Result<CliConfig, String> {
     let mut target = None;
@@ -154,14 +156,75 @@ fn parsing_target_list(targets: &str) -> Result<Vec<String>, String> {
     let mut valid_targets = Vec::new();
     let mut seen = HashSet::new();
     for target in targets.split(',') {
-        let address = target
-            .parse::<Ipv4Addr>()
-            .map_err(|_| format!("Invalid IPv4 address: {target}"))?;
-        if seen.insert(address) {
-            valid_targets.push(address.to_string());
+        let (first, last) = if target.contains('/') {
+            let (address, prefix) = parsing_target_for_subnet(target)?;
+            let (network, broadcast) = calculate_subnet_boundaries(address, prefix);
+            let first = u32::from(network);
+            let last = u32::from(broadcast);
+            // /31 includes both endpoints; /32 includes its single address.
+            if prefix < 31 {
+                (first + 1, last - 1)
+            } else {
+                (first, last)
+            }
+        } else {
+            let address = target
+                .parse::<Ipv4Addr>()
+                .map_err(|_| format!("Invalid IPv4 address: {target}"))?;
+            let address = u32::from(address);
+            (address, address)
+        };
+        // Count in u64 so /0 cannot overflow; reject oversized subnets before expansion.
+        let count = u64::from(last) - u64::from(first) + 1;
+        if count > MAX_TARGETS as u64 {
+            return Err(format!(
+                "Target subnet {target} exceeds the limit of {MAX_TARGETS} unique targets"
+            ));
+        }
+        for address in first..=last {
+            let address = Ipv4Addr::from(address);
+            if seen.insert(address) {
+                if valid_targets.len() == MAX_TARGETS {
+                    return Err(format!(
+                        "Target list exceeds the limit of {MAX_TARGETS} unique targets"
+                    ));
+                }
+                valid_targets.push(address.to_string());
+            }
         }
     }
     Ok(valid_targets)
+}
+
+fn parsing_target_for_subnet(target: &str) -> Result<(Ipv4Addr, u8), String> {
+    let (address_str, prefix) = target
+        .split_once('/')
+        .ok_or_else(|| format!("Invalid subnet format: {target}"))?;
+    let address = address_str
+        .parse::<Ipv4Addr>()
+        .map_err(|_| format!("Invalid IPv4 address: {address_str}"))?;
+    let prefix_length = prefix
+        .parse::<u8>()
+        .map_err(|_| format!("Invalid subnet prefix length: {prefix}"))?;
+
+    if prefix_length > 32 {
+        return Err(format!("Invalid subnet prefix length: {prefix_length}"));
+    }
+    Ok((address, prefix_length))
+}
+
+fn calculate_subnet_boundaries(address: Ipv4Addr, prefix_length: u8) -> (Ipv4Addr, Ipv4Addr) {
+    if prefix_length > 32 {
+        panic!("Invalid subnet prefix length: {prefix_length}");
+    }
+    let mask = if prefix_length == 0 {
+        0
+    } else {
+        u32::MAX << (32 - prefix_length)
+    };
+    let network = u32::from(address) & mask;
+    let broadcast = network | !mask;
+    (Ipv4Addr::from(network), Ipv4Addr::from(broadcast))
 }
 
 #[cfg(test)]
