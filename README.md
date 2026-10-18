@@ -1,6 +1,6 @@
 # rmap
 
-Current version: **0.3.0**.
+Current version: **0.4.2**.
 
 `rmap` aims to be a network scanner inspired by Nmap, written in Rust and extended with AI interpretation. Its goal is to find and describe exposed services, then help a user understand what observed service versions might mean, including possible CVE leads. Scan measurements and AI conclusions stay separate so the tool can show what it observed without presenting a model's guess as a fact.
 
@@ -51,8 +51,8 @@ Rig is pinned to version 0.42.0, and `Cargo.lock` records the resolved dependenc
 | `--tcp` | Run the TCP connect scanner; default when neither transport flag is supplied |
 | `--udp` | Send an empty UDP probe to each selected port and wait for a response |
 | `--target IPV4` | IPv4 address to scan; hostnames and IPv6 are not accepted |
-| `--ports PORT[,PORT...]` | Optional list of ports, reported in the given order; omitting it selects all ports from 1 through 65535 |
-| `--exclude-ports PORT[,PORT...]` | Remove ports from an earlier explicit `--ports` list; may be given once and must leave at least one selected port |
+| `--ports LIST` | Comma-separated ports and inclusive ranges, such as `22,80-82,443`; omitting it selects all ports from 1 through 65535 |
+| `--exclude-ports LIST` | Ports and inclusive ranges to remove from an earlier explicit `--ports` list; may be given once and must leave at least one selected port |
 | `--timeout-ms MILLISECONDS` | Optional positive timeout for network operations; defaults to `1000` ms |
 | `--concurrency N` | Maximum simultaneous probes; defaults to `256`, accepts `1` through `1024` |
 | `--ai` | Request DeepSeek interpretation after the scan report |
@@ -66,7 +66,15 @@ To exclude ports from an explicit list, place `--exclude-ports` after `--ports`:
 rmap --target 192.0.2.21 --ports 22,80,443 --exclude-ports 22
 ```
 
-This selects ports 80 and 443. Without the exclusion flag, the selected list stays unchanged. Exclusions work for TCP and UDP and preserve the order of remaining ports. Ports absent from the selected list have no effect. Missing or invalid exclusion values, repeated exclusion flags, and exclusions removing every selected port are rejected before scanning. Exclusions require an explicit earlier port list; they cannot be applied to the default full scan. Port ranges such as `1-1024` are not yet supported by either flag.
+This selects ports 80 and 443. Without the exclusion flag, the selected list stays unchanged. Exclusions work for TCP and UDP and preserve the order of remaining ports. Ports absent from the selected list have no effect. Missing or invalid exclusion values, repeated exclusion flags, and exclusions removing every selected port are rejected before scanning. Exclusions require an explicit earlier port list; they cannot be applied to the default full scan. Both flags accept individual ports and inclusive ranges. Each endpoint must be from 1 through 65535, with the start no greater than the end; equal endpoints select one port. Missing endpoints, reversed ranges, zero, and malformed values are rejected. Expanded ports keep the input order, including duplicates from overlapping ranges.
+
+For mixed ports and ranges:
+
+```bash
+rmap --target 192.0.2.21 --ports 22,80-84,443 --exclude-ports 81-83
+```
+
+This selects ports 22, 80, 84, and 443. An explicit `--ports 1-65535` also works, but keeps explicit-list reporting with all outcomes; omitting `--ports` keeps the open-only full-scan report.
 
 The minimal command scans all TCP ports with a 1000 ms timeout:
 

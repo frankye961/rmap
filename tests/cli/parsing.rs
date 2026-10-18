@@ -233,7 +233,7 @@ fn exclusions_require_an_earlier_explicit_port_list() {
 #[test]
 fn rejects_invalid_or_missing_exclusion_values() {
     for value in [
-        "", "0", "65536", "-1", "22,", ",22", "22,,80", "abc", "null", "1-1024",
+        "", "0", "65536", "-1", "22,", ",22", "22,,80", "abc", "null", "1024-1",
     ] {
         let args = arguments(&["--exclude-ports", value]);
         assert!(parse_cli(&args).is_err(), "accepted exclusions: {value:?}");
@@ -261,13 +261,93 @@ fn rejects_repeated_exclusion_flags() {
 #[test]
 fn exclusions_cannot_remove_every_selected_port() {
     for mode in ["--tcp", "--udp"] {
-        let args = arguments(&[mode, "--exclude-ports", "80,22"]);
-        assert!(
-            parse_cli(&args)
-                .unwrap_err()
-                .contains("leaves no ports to scan")
-        );
+        for excluded in ["80,22", "1-1024"] {
+            let args = arguments(&[mode, "--exclude-ports", excluded]);
+            assert!(
+                parse_cli(&args)
+                    .unwrap_err()
+                    .contains("leaves no ports to scan")
+            );
+        }
     }
     let config = parse_cli(&arguments(&["--exclude-ports", "9999"])).unwrap();
     assert_eq!(config.ports, ["22", "80"]);
+}
+
+#[test]
+fn parses_mixed_ports_and_inclusive_ranges_in_input_order() {
+    assert_eq!(
+        super::parsing_ports_function("22,80-82,443").unwrap(),
+        ["22", "80", "81", "82", "443"]
+    );
+    assert_eq!(
+        super::parsing_ports_function("443,80-82,81-83,22").unwrap(),
+        ["443", "80", "81", "82", "81", "82", "83", "22"]
+    );
+}
+
+#[test]
+fn port_ranges_include_equal_endpoints_and_numeric_boundaries() {
+    assert_eq!(
+        super::parsing_ports_function("1-1,65535-65535,080-082").unwrap(),
+        ["1", "65535", "80", "81", "82"]
+    );
+    let ports = super::parsing_ports_function("1-65535").unwrap();
+    assert_eq!(ports.len(), 65_535);
+    for (expected, actual) in (1..=u16::MAX).zip(&ports) {
+        assert_eq!(*actual, expected.to_string());
+    }
+}
+
+#[test]
+fn rejects_reversed_zero_out_of_range_and_malformed_port_ranges() {
+    for input in [
+        "80-22",
+        "0-80",
+        "0-0",
+        "1-0",
+        "1-65536",
+        "65536-65537",
+        "-80",
+        "80-",
+        "-",
+        "1-2-3",
+        "1--2",
+        "abc-80",
+        "80-abc",
+        "22,80-",
+        "22,,80-82",
+        "80-82,",
+        "80-82,0",
+        "80-82,65536",
+    ] {
+        assert!(
+            super::parsing_ports_function(input).is_err(),
+            "accepted invalid port range input: {input:?}"
+        );
+    }
+}
+
+#[test]
+fn both_transports_expand_selected_ranges_and_apply_mixed_range_exclusions() {
+    for mode in ["--tcp", "--udp"] {
+        let mut args = arguments(&[mode, "--exclude-ports", "81-83,9999"]);
+        let index = args.iter().position(|arg| arg == "--ports").unwrap();
+        args[index + 1] = "22,80-84,443".into();
+        let config = parse_cli(&args).unwrap();
+        assert_eq!(config.ports, ["22", "80", "84", "443"]);
+        assert!(!config.full_scan);
+    }
+}
+
+#[test]
+fn explicit_full_port_range_keeps_explicit_list_reporting() {
+    let mut args = arguments(&[]);
+    let index = args.iter().position(|arg| arg == "--ports").unwrap();
+    args[index + 1] = "1-65535".into();
+    let config = parse_cli(&args).unwrap();
+    assert!(!config.full_scan);
+    assert_eq!(config.ports.len(), 65_535);
+    assert_eq!(config.ports.first().map(String::as_str), Some("1"));
+    assert_eq!(config.ports.last().map(String::as_str), Some("65535"));
 }
