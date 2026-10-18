@@ -1,4 +1,4 @@
-# rmap
+# rmap (ALPHA version)
 
 Current version: **0.4.2**.
 
