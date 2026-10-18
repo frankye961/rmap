@@ -38,8 +38,8 @@ flowchart TD
 | `src/cli/config.rs` | Validated `CliConfig` settings, including concurrency and whether `--ports` was omitted |
 | `src/scan/mod.rs` | Dispatch TCP or UDP through one entry point |
 | `src/scan/worker.rs` | Schedule bounded async tasks on a shared Tokio runtime, report completions, and restore input order |
-| `src/scan/tcp.rs` | TCP connection attempts, status classification, bounded passive reads, and SSH identification |
-| `src/scan/identify.rs` | Parse supported SSH, HTTP and FTP banners into service information |
+| `src/scan/tcp.rs` | TCP connection attempts, status classification, bounded passive reads, and collected-banner identification |
+| `src/scan/identify.rs` | Parse supported SSH, HTTP, FTP and SMTP banners into service information |
 | `src/scan/http.rs` | HTTP `HEAD` probe on open TCP port 80 and `Server` header extraction |
 | `src/scan/udp.rs` | One empty UDP probe, receive timeout, and outcome classification |
 | `src/model/mod.rs` | Shared measured results, transport and status enums, and separate AI data |
@@ -52,7 +52,7 @@ flowchart TD
 | `src/ai/web.rs` | Bounded Brave Search HTTP requests exposed as a Rig tool and capture of returned evidence |
 | `src/ai/service.rs` | Research instructions, bounded scan context, model/tool orchestration, and error handling |
 
-Protocol parsers retain their format-specific rules. Shared byte operations live in utility functions, and model construction lives in mapper functions. SSH, HTTP and FTP reuse the same service mapper; TCP banner previews, UDP response previews and HTTP header previews reuse the same byte-escaping helper. AI context and local advisory matching reuse the same banner-text decoder. These modules use ordinary Rust functions and do not add dependencies.
+Protocol parsers retain their format-specific rules. Shared byte operations live in utility functions, and model construction lives in mapper functions. SSH, HTTP, FTP and SMTP reuse the same service mapper; TCP banner previews, UDP response previews and HTTP header previews reuse the same byte-escaping helper. AI context and local advisory matching reuse the same banner-text decoder. These modules use ordinary Rust functions and do not add dependencies.
 
 ## Shared types
 
@@ -80,6 +80,12 @@ Reporting filters to confirmed open ports only when `--ports` was omitted. Expli
 ## Measured outcomes and timing
 
 Passive TCP banner reads continue across short reads until the newline, byte limit, timeout or connection close; the number of read calls does not determine the byte limit. TCP elapsed time measures the initial connection attempt. Later passive reads and HTTP probes have their own waits and are excluded from that value. A refused connection is closed; a connection timeout is tentatively filtered. Successful connections remain open even when later banner collection fails. After a TCP result is assembled, the identification module examines its preserved banner. Complete supported SSH identification lines supply an `ssh` label, and the `OpenSSH_` software identifier supplies the product and version. Optional comments preserve distribution information. The extracted fields also enter AI context. Unknown SSH implementations retain a protocol label without guessed product/version fields. A valid HTTP probe response supplies an `http` label; other observations may retain an unknown service label.
+
+Identification tries SSH, HTTP, FTP, then SMTP. Every parser uses `complete_lines` for CRLF-terminated lines and `map_tcp_service` to construct identification data. `starts_with_digit` supplies the shared version-prefix check. `collect_banner` applies identification through `apply_service_information`, preserving the port state, elapsed time, raw banner bytes, and read stop reason.
+
+The SMTP parser first checks for an exact uppercase `SMTP` or `ESMTP` whitespace token, then requires a `220 ` or `220-` greeting prefix. It searches the remaining tokens for `Postfix` or `Exim`; the immediately following token is retained as a version only when it starts with an ASCII digit and contains ASCII alphanumeric characters, dots, hyphens, or underscores. Product and version are optional, so an unknown implementation still receives an `smtp` label. The same logic applies on nonstandard ports and is covered by in-memory fixtures.
+
+SMTP identification is passive. There is no `EHLO`, `STARTTLS`, implicit TLS handling, slash-style product/version parsing, or complete multiline greeting collection. Passive reads stop at a newline, so later greeting lines are not guaranteed to be available. Structured SMTP fields enter the existing AI context when that result is selected within the observation limit; identifying SMTP does not itself trigger any AI request.
 
 UDP uses a fresh socket bound to `0.0.0.0:0` for each selected port. UDP `connect` selects the remote peer and restricts incoming datagrams without a handshake. The scanner sends an empty datagram and waits for a response. A reply is open, an OS-reported refusal is closed, and receive timeout is open or filtered. Setup and other I/O errors remain undetermined. UDP elapsed time includes setup, sending, and receiving. Empty datagrams often receive no reply from services requiring protocol-specific requests; UDP service identification is not implemented.
 

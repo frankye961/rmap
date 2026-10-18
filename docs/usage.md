@@ -56,6 +56,10 @@ When `--ports` is omitted, only confirmed `open` ports are printed in the measur
 
 TCP connects and then collects a passive banner, or sends an HTTP `HEAD` probe on open port 80. UDP sends an empty datagram; protocol-specific UDP requests and service identification are not implemented. A UDP timeout is reported as `open|filtered` because a listening service may ignore that datagram.
 
+Passive banner recognition supports SSH, HTTP, selected FTP greetings, and SMTP greetings. For SMTP, a complete CRLF-terminated `220 ` or `220-` greeting must contain an exact uppercase `SMTP` or `ESMTP` token. The service label becomes `smtp`, even without a known product. Separate `Postfix` and `Exim` tokens supply a product; an immediately following supported version token supplies the version. Unknown fields stay unset. Port numbers do not determine the service label.
+
+For example, `220 mail.example.test ESMTP Exim 4.98` identifies SMTP, Exim, and version 4.98. `220 mail.example.test ESMTP Postfix` identifies SMTP and Postfix without guessing a version. No SMTP commands, TLS negotiation, slash-style version parsing, or complete multiline greeting collection are implemented.
+
 `--timeout-ms` governs individual network operations, not the whole scan. TCP connection time excludes later banner collection. UDP elapsed time includes socket setup and the send/receive attempt. OS scheduling can make measured waits slightly longer than the requested timeout.
 
 ## Enable public CVE and exploit research
