@@ -195,3 +195,79 @@ fn explicit_port_lists_keep_the_complete_report_for_both_transports() {
         assert!(!parse_cli(&arguments(&[mode])).unwrap().full_scan);
     }
 }
+
+#[test]
+fn exclusions_remove_only_selected_ports_and_preserve_order_for_both_transports() {
+    for mode in ["--tcp", "--udp"] {
+        let mut args = arguments(&[mode, "--exclude-ports", "022,65535,9999"]);
+        let index = args.iter().position(|arg| arg == "--ports").unwrap();
+        args[index + 1] = "443,22,80,443,65535".into();
+        let config = parse_cli(&args).unwrap();
+        assert_eq!(config.ports, ["443", "80", "443"]);
+        assert!(!config.full_scan);
+    }
+}
+
+#[test]
+fn exclusions_require_an_earlier_explicit_port_list() {
+    for flags in [
+        vec!["--target", "127.0.0.1", "--exclude-ports", "22"],
+        vec![
+            "--target",
+            "127.0.0.1",
+            "--exclude-ports",
+            "22",
+            "--ports",
+            "22,80",
+        ],
+    ] {
+        let args: Vec<String> = flags.into_iter().map(String::from).collect();
+        assert!(
+            parse_cli(&args)
+                .unwrap_err()
+                .contains("requires --ports to be specified first")
+        );
+    }
+}
+
+#[test]
+fn rejects_invalid_or_missing_exclusion_values() {
+    for value in [
+        "", "0", "65536", "-1", "22,", ",22", "22,,80", "abc", "null", "1-1024",
+    ] {
+        let args = arguments(&["--exclude-ports", value]);
+        assert!(parse_cli(&args).is_err(), "accepted exclusions: {value:?}");
+    }
+    for flags in [vec!["--exclude-ports"], vec!["--exclude-ports", "--ai"]] {
+        let args = arguments(&flags);
+        assert!(
+            parse_cli(&args)
+                .unwrap_err()
+                .contains("Missing value for --exclude-ports")
+        );
+    }
+}
+
+#[test]
+fn rejects_repeated_exclusion_flags() {
+    let args = arguments(&["--exclude-ports", "22", "--exclude-ports", "443"]);
+    assert!(
+        parse_cli(&args)
+            .unwrap_err()
+            .contains("--exclude-ports was given more than once")
+    );
+}
+
+#[test]
+fn exclusions_cannot_remove_every_selected_port() {
+    for mode in ["--tcp", "--udp"] {
+        let args = arguments(&[mode, "--exclude-ports", "80,22"]);
+        assert!(
+            parse_cli(&args)
+                .unwrap_err()
+                .contains("leaves no ports to scan")
+        );
+    }
+    let config = parse_cli(&arguments(&["--exclude-ports", "9999"])).unwrap();
+    assert_eq!(config.ports, ["22", "80"]);
+}
