@@ -20,6 +20,14 @@ Cargo's installation directory, usually `~/.cargo/bin`, must be on `PATH`. Reins
 
 Only a numeric IPv4 `--target` is required. Omit the transport flags to use TCP, or select `--udp` explicitly. The flags cannot be combined or repeated. Omit `--timeout-ms` to use 1000 milliseconds, or supply a positive integer to override it. Optionally select comma-separated ports from 1 through 65535 with `--ports`. Omitting `--ports` selects all 65535 ports in ascending order. An explicitly empty value or a `--ports` flag without a value is rejected. Hostnames and IPv6 are not accepted. TCP and UDP probes run concurrently, with up to 256 active async probes by default. The final report preserves the supplied port order, regardless of completion order.
 
+To remove selected ports, supply `--exclude-ports` after an explicit `--ports` list:
+
+```bash
+rmap --tcp --target 192.0.2.21 --ports 22,80,443 --exclude-ports 22
+```
+
+The selected list becomes 80,443; the same exclusion behavior applies to UDP. Remaining ports keep their original order. Without the flag, no ports are excluded. Excluding a port not in the selected list has no effect. The flag may appear only once, requires a valid comma-separated list from 1 through 65535, and must leave at least one selected port. A missing value or a following option instead of a value is rejected. Exclusions before `--ports` or without it are rejected, including for default full scans. Neither flag currently accepts port ranges.
+
 The minimal command uses TCP, ports 1–65535, and a 1000 ms timeout:
 
 ```bash
