@@ -1,6 +1,6 @@
 # rmap (ALPHA version)
 
-Current version: **0.4.0**.
+Current version: **0.4.1**.
 
 `rmap` aims to be a network scanner inspired by Nmap, written in Rust and extended with AI interpretation. Its goal is to find and describe exposed services, then help a user understand what observed service versions might mean, including possible CVE leads. Scan measurements and AI conclusions stay separate so the tool can show what it observed without presenting a model's guess as a fact.
 
