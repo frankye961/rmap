@@ -376,7 +376,6 @@ fn rejects_invalid_or_empty_target_entries_before_scanning() {
         "192.0.2.10,999.0.0.1",
         "192.0.2.10,localhost",
         "192.0.2.10,::1",
-        "192.0.2.0/24",
     ] {
         let mut args = arguments(&[]);
         let index = args.iter().position(|arg| arg == "--target").unwrap();
@@ -425,4 +424,115 @@ fn repeated_target_is_scheduled_only_once_for_both_transports() {
         args[index + 1] = "192.0.2.10,192.0.2.10,192.0.2.10".into();
         assert_eq!(parse_cli(&args).unwrap().target, ["192.0.2.10"]);
     }
+}
+
+#[test]
+fn cidr_helpers_parse_and_calculate_network_boundaries() {
+    use std::net::Ipv4Addr;
+    let (address, prefix) = super::parsing_target_for_subnet("192.0.2.129/24").unwrap();
+    assert_eq!(address, Ipv4Addr::new(192, 0, 2, 129));
+    assert_eq!(prefix, 24);
+    for (prefix, first, last) in [
+        (0, "0.0.0.0", "255.255.255.255"),
+        (24, "192.0.2.0", "192.0.2.255"),
+        (31, "192.0.2.128", "192.0.2.129"),
+        (32, "192.0.2.129", "192.0.2.129"),
+    ] {
+        let (network, broadcast) = super::calculate_subnet_boundaries(address, prefix);
+        assert_eq!(network.to_string(), first);
+        assert_eq!(broadcast.to_string(), last);
+    }
+    assert!(super::parsing_target_for_subnet("192.0.2.1").is_err());
+}
+
+#[test]
+fn expands_cidr_and_mixed_targets_through_the_cli_for_both_transports() {
+    for mode in ["--tcp", "--udp"] {
+        let mut args = arguments(&[mode]);
+        let index = args.iter().position(|arg| arg == "--target").unwrap();
+        args[index + 1] = "192.0.2.2,192.0.2.3/30,192.0.2.0/30,192.0.2.10/32".into();
+        let config = parse_cli(&args).unwrap();
+        assert_eq!(config.target, ["192.0.2.2", "192.0.2.1", "192.0.2.10"]);
+        assert_eq!(config.ports, ["22", "80"]);
+    }
+    let hosts = super::parsing_target_list("192.0.2.129/24").unwrap();
+    assert_eq!(hosts.len(), 254);
+    assert_eq!(hosts.first().map(String::as_str), Some("192.0.2.1"));
+    assert_eq!(hosts.last().map(String::as_str), Some("192.0.2.254"));
+}
+
+#[test]
+fn includes_slash_31_and_32_endpoints_without_overflow() {
+    for (input, expected) in [
+        ("192.0.2.1/31", vec!["192.0.2.0", "192.0.2.1"]),
+        (
+            "255.255.255.255/31",
+            vec!["255.255.255.254", "255.255.255.255"],
+        ),
+        ("255.255.255.255/32", vec!["255.255.255.255"]),
+        ("0.0.0.0/32", vec!["0.0.0.0"]),
+    ] {
+        assert_eq!(super::parsing_target_list(input).unwrap(), expected);
+    }
+}
+
+#[test]
+fn rejects_invalid_cidr_inputs_through_cli_before_scanning() {
+    for input in [
+        "192.0.2.1/33",
+        "192.0.2.1/256",
+        "192.0.2.1/-1",
+        "192.0.2.1/",
+        "/24",
+        "192.0.2.1/abc",
+        "192.0.2.1/24/25",
+        "999.0.0.1/24",
+        "192.0.2.1/32,",
+        "192.0.2.1/32,,192.0.2.2",
+    ] {
+        let mut args = arguments(&[]);
+        let index = args.iter().position(|arg| arg == "--target").unwrap();
+        args[index + 1] = input.into();
+        assert!(
+            parse_cli(&args).is_err(),
+            "accepted invalid CIDR: {input:?}"
+        );
+    }
+}
+
+#[test]
+fn bounds_unique_targets_before_large_subnet_expansion() {
+    for input in ["0.0.0.0/0", "198.18.0.0/19"] {
+        let error = super::parsing_target_list(input).unwrap_err();
+        assert!(error.contains("4096"));
+    }
+    let at_limit = "198.18.0.0/20,198.18.16.0,198.18.16.1";
+    assert_eq!(
+        super::parsing_target_list(at_limit).unwrap().len(),
+        super::MAX_TARGETS
+    );
+    // Duplicates at the limit must remain valid, including an overlapping subnet.
+    let duplicate = format!("{at_limit},198.18.16.1,198.18.0.1/30");
+    assert_eq!(
+        super::parsing_target_list(&duplicate).unwrap().len(),
+        super::MAX_TARGETS
+    );
+    let too_many = format!("{at_limit},198.18.16.2");
+    assert!(
+        super::parsing_target_list(&too_many)
+            .unwrap_err()
+            .contains("4096")
+    );
+
+    let individual: Vec<String> = (0..=super::MAX_TARGETS as u32)
+        .map(|offset| {
+            std::net::Ipv4Addr::from(u32::from(std::net::Ipv4Addr::new(198, 18, 0, 0)) + offset)
+                .to_string()
+        })
+        .collect();
+    assert!(
+        super::parsing_target_list(&individual.join(","))
+            .unwrap_err()
+            .contains("4096")
+    );
 }

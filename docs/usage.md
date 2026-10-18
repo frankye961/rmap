@@ -18,13 +18,21 @@ Cargo's installation directory, usually `~/.cargo/bin`, must be on `PATH`. Reins
 
 ## Select TCP or UDP
 
-Only `--target` is required; it accepts one numeric IPv4 address or a comma-separated list. Omit the transport flags to use TCP, or select `--udp` explicitly. The flags cannot be combined or repeated. Omit `--timeout-ms` to use 1000 milliseconds, or supply a positive integer to override it. Optionally select comma-separated ports and inclusive ranges from 1 through 65535 with `--ports`, for example `22,80-82,443`. Omitting `--ports` selects all 65535 ports in ascending order. An explicitly empty value or a `--ports` flag without a value is rejected. Hostnames and IPv6 are not accepted. TCP and UDP probes run concurrently, with up to 256 active async probes by default. The final report preserves the supplied port order, regardless of completion order.
+Only `--target` is required; it accepts a comma-separated list of numeric IPv4 addresses and CIDR subnets. Omit the transport flags to use TCP, or select `--udp` explicitly. The flags cannot be combined or repeated. Omit `--timeout-ms` to use 1000 milliseconds, or supply a positive integer to override it. Optionally select comma-separated ports and inclusive ranges from 1 through 65535 with `--ports`, for example `22,80-82,443`. Omitting `--ports` selects all 65535 ports in ascending order. An explicitly empty value or a `--ports` flag without a value is rejected. Hostnames and IPv6 are not accepted. TCP and UDP probes run concurrently, with up to 256 active async probes by default. The final report preserves the supplied port order, regardless of completion order.
 
 ```bash
 rmap --target 192.0.2.10,192.0.2.11,192.0.2.10 --ports 22,80-82
 ```
 
-Targets are deduplicated in first-occurrence order: this scans `192.0.2.10` once and `192.0.2.11` once. Every entry is validated before scanning; empty entries, malformed addresses, and CIDR input are rejected. Hosts are processed sequentially, with concurrent ports and separate progress and reports per host. Optional AI research runs after each host’s measured report, using only that host’s results and a separate session budget. An AI failure does not stop later hosts; a scan-level failure terminates the run.
+Targets are deduplicated in first-occurrence order: this scans `192.0.2.10` once and `192.0.2.11` once. Every entry is validated before scanning; empty entries, malformed addresses, and invalid CIDR prefixes are rejected. Hosts are processed sequentially, with concurrent ports and separate progress and reports per host. CIDR expansion selects addresses without first checking whether they are online. Optional AI research runs after each host’s measured report, using only that host’s results and a separate session budget. An AI failure does not stop later hosts; a scan-level failure terminates the run.
+
+CIDR entries use an IPv4 address and a prefix from 0 through 32:
+
+```bash
+rmap --target 192.0.2.3/30,192.0.2.10 --ports 22,80,443
+```
+
+The subnet is normalized to `192.0.2.0/30`, yielding `192.0.2.1` and `192.0.2.2`, followed by the individual target `192.0.2.10`. Expansion is ascending within each subnet, with duplicates removed across all entries. `/0` through `/30` exclude network and broadcast addresses; `/31` includes both endpoints and `/32` includes one address. The combined list is limited to **4,096 unique targets**, including individual addresses. Subnets exceeding that count are rejected before expansion; combined selections exceeding it are rejected before scanning. `/0` parses successfully but exceeds the limit. All selected addresses are scanned without a separate discovery phase.
 
 To remove selected ports, supply `--exclude-ports` after an explicit `--ports` list:
 
@@ -110,6 +118,7 @@ See the [README's recorded TCP run](../README.md#example-tcp-scan-with-ai-resear
 | Symptom | What to check |
 | --- | --- |
 | `rmap: command not found` | Install with Cargo and add its binary directory to `PATH` |
+| Target limit exceeded | Choose a smaller subnet or fewer unique addresses; the limit is 4,096 across the combined selection, after deduplication |
 | Scan appears stuck after the banner | Check the startup port count and progress; omitted `--ports` means all 65535 ports. Use a smaller explicit list for a quick scan |
 | Waiting after measured results appear | With `--ai`, the separate research phase can run until `RMAP_AI_TIMEOUT_MS` expires |
 | Old behavior after rebuilding | Reinstall, or run `./target/release/rmap` directly |
