@@ -18,7 +18,7 @@ Cargo's installation directory, usually `~/.cargo/bin`, must be on `PATH`. Reins
 
 ## Select TCP or UDP
 
-Only a numeric IPv4 `--target` is required. Omit the transport flags to use TCP, or select `--udp` explicitly. The flags cannot be combined or repeated. Omit `--timeout-ms` to use 1000 milliseconds, or supply a positive integer to override it. Optionally select comma-separated ports from 1 through 65535 with `--ports`. Omitting `--ports` selects all 65535 ports in ascending order. An explicitly empty value or a `--ports` flag without a value is rejected. Hostnames and IPv6 are not accepted. TCP and UDP probes run concurrently, with up to 256 active async probes by default. The final report preserves the supplied port order, regardless of completion order.
+Only a numeric IPv4 `--target` is required. Omit the transport flags to use TCP, or select `--udp` explicitly. The flags cannot be combined or repeated. Omit `--timeout-ms` to use 1000 milliseconds, or supply a positive integer to override it. Optionally select comma-separated ports and inclusive ranges from 1 through 65535 with `--ports`, for example `22,80-82,443`. Omitting `--ports` selects all 65535 ports in ascending order. An explicitly empty value or a `--ports` flag without a value is rejected. Hostnames and IPv6 are not accepted. TCP and UDP probes run concurrently, with up to 256 active async probes by default. The final report preserves the supplied port order, regardless of completion order.
 
 To remove selected ports, supply `--exclude-ports` after an explicit `--ports` list:
 
@@ -26,7 +26,13 @@ To remove selected ports, supply `--exclude-ports` after an explicit `--ports` l
 rmap --tcp --target 192.0.2.21 --ports 22,80,443 --exclude-ports 22
 ```
 
-The selected list becomes 80,443; the same exclusion behavior applies to UDP. Remaining ports keep their original order. Without the flag, no ports are excluded. Excluding a port not in the selected list has no effect. The flag may appear only once, requires a valid comma-separated list from 1 through 65535, and must leave at least one selected port. A missing value or a following option instead of a value is rejected. Exclusions before `--ports` or without it are rejected, including for default full scans. Neither flag currently accepts port ranges.
+The selected list becomes 80,443; the same exclusion behavior applies to UDP. Remaining ports keep their original order. Without the flag, no ports are excluded. Excluding a port not in the selected list has no effect. The flag may appear only once, requires a valid comma-separated list of ports or inclusive ranges from 1 through 65535, and must leave at least one selected port. A missing value or a following option instead of a value is rejected. Exclusions before `--ports` or without it are rejected, including for default full scans. Both flags accept ranges such as `1-1024`. Range endpoints must be nonzero and fit in `u16`, with start no greater than end. A range with equal endpoints selects one port. Missing endpoints, extra separators, and invalid numbers are rejected. Expansions preserve input order and duplicates.
+
+```bash
+rmap --target 192.0.2.21 --ports 22,80-84,443 --exclude-ports 81-83
+```
+
+This scans 22,80,84,443. An explicit `--ports 1-65535` selects the full numeric range but still displays all outcomes, because an explicit port list was supplied. Omit `--ports` for the open-only full-scan report.
 
 The minimal command uses TCP, ports 1–65535, and a 1000 ms timeout:
 

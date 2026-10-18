@@ -8,7 +8,7 @@ pub use config::CliConfig;
 
 use crate::model::{DEFAULT_CONCURRENCY, MAX_CONCURRENCY, ScanMode};
 
-pub const USAGE: &str = "Usage: rmap --target IPV4 [--tcp | --udp] [--ports PORT[,PORT...]] [--exclude-ports PORT[,PORT...]] [--timeout-ms MILLISECONDS] [--concurrency N] [--ai]\nDefaults: TCP, all ports from 1 to 65535, timeout 1000 ms, concurrency 256 (1-1024).\nFull-range scans show only open ports; explicit --ports lists show all outcomes.\n--exclude-ports requires an earlier --ports list and must leave at least one port.";
+pub const USAGE: &str = "Usage: rmap --target IPV4 [--tcp | --udp] [--ports LIST] [--exclude-ports LIST] [--timeout-ms MILLISECONDS] [--concurrency N] [--ai]\nDefaults: TCP, all ports from 1 to 65535, timeout 1000 ms, concurrency 256 (1-1024).\nFull-range scans show only open ports; explicit --ports lists show all outcomes.\nPort lists accept individual ports and inclusive ranges, e.g. 22,80-82,443.\n--exclude-ports requires an earlier --ports list and must leave at least one port.";
 
 pub fn parse_cli(args: &[String]) -> Result<CliConfig, String> {
     let mut target = None;
@@ -43,16 +43,7 @@ pub fn parse_cli(args: &[String]) -> Result<CliConfig, String> {
             }
             "--ports" => {
                 let value = args.next().ok_or("Missing value for --ports")?;
-                let mut parsed_ports = Vec::new();
-                for item in value.split(',') {
-                    let port = item
-                        .parse::<u16>()
-                        .map_err(|_| format!("Invalid port: {item}"))?;
-                    if port == 0 {
-                        return Err("Ports must be between 1 and 65535".to_string());
-                    }
-                    parsed_ports.push(port.to_string());
-                }
+                let parsed_ports = parsing_ports_function(value)?;
                 if ports.replace(parsed_ports).is_some() {
                     return Err("--ports was given more than once".to_string());
                 }
@@ -71,16 +62,7 @@ pub fn parse_cli(args: &[String]) -> Result<CliConfig, String> {
                     .next()
                     .filter(|value| !value.starts_with("--"))
                     .ok_or("Missing value for --exclude-ports")?;
-                let mut excluded_ports = Vec::new();
-                for item in value.split(',') {
-                    let port = item
-                        .parse::<u16>()
-                        .map_err(|_| format!("Invalid port: {item}"))?;
-                    if port == 0 {
-                        return Err("Ports must be between 1 and 65535".to_string());
-                    }
-                    excluded_ports.push(port.to_string());
-                }
+                let excluded_ports = parsing_ports_function(value)?;
                 if let Some(ref mut existing_ports) = ports {
                     existing_ports.retain(|p| !excluded_ports.contains(p));
                     if existing_ports.is_empty() {
@@ -136,6 +118,35 @@ pub fn parse_cli(args: &[String]) -> Result<CliConfig, String> {
         use_ai,
         concurrency: concurrency.unwrap_or(DEFAULT_CONCURRENCY),
     })
+}
+
+fn parsing_ports_function(s: &str) -> Result<Vec<String>, String> {
+    let mut ports = Vec::new();
+    for item in s.split(',') {
+        if let Some((start, end)) = item.split_once('-') {
+            let start_port = start
+                .parse::<u16>()
+                .map_err(|_| format!("Invalid port number: {start}"))?;
+            let end_port = end
+                .parse::<u16>()
+                .map_err(|_| format!("Invalid port number: {end}"))?;
+            if start_port == 0 || end_port == 0 || start_port > end_port {
+                return Err(format!("Invalid port range: {item}"));
+            }
+            for port in start_port..=end_port {
+                ports.push(port.to_string());
+            }
+        } else {
+            let port = item
+                .parse::<u16>()
+                .map_err(|_| format!("Invalid port number: {item}"))?;
+            if port == 0 {
+                return Err("Ports must be between 1 and 65535".to_string());
+            }
+            ports.push(port.to_string());
+        }
+    }
+    Ok(ports)
 }
 
 #[cfg(test)]
