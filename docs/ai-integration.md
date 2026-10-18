@@ -12,6 +12,8 @@ Settings come from environment variables or a local `.env` in the working direct
 
 ## Research flow
 
+For a multi-target scan, each unique host has a separate measured report and optional AI research session before the next host starts. Target deduplication occurs before scanning, so repeating an address does not repeat AI research. The timeout and search/model call limits apply per host; observations from different hosts are not combined. AI failures leave the host’s measurements visible and do not stop subsequent hosts.
+
 The prompt contains up to eight measured outcomes, with open ports first, and up to 160 characters of each observation or error. It includes closed and uncertain outcomes so the agent can explain a scan even when nothing is open. Product and version text from banners and HTTP headers are the starting point, including space-separated banners such as `220 (vsFTPd 3.0.5)`. Port numbers alone are insufficient for identifying a product.
 
 Supported SMTP greetings supply structured service, product, and version fields to the existing AI context when included in its observation limit. For example, `220 mail.example.test ESMTP Exim 4.98` supplies `smtp`, `Exim`, and `4.98`; a Postfix greeting without a version leaves that field unknown. These fields are self-reported banner observations, and missing versions must not be invented. SMTP identification itself is passive and does not enable AI or trigger provider calls.

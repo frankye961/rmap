@@ -1,18 +1,18 @@
 # rmap
 
-Current version: **0.4.2**.
+Current version: **0.4.3**.
 
 `rmap` aims to be a network scanner inspired by Nmap, written in Rust and extended with AI interpretation. Its goal is to find and describe exposed services, then help a user understand what observed service versions might mean, including possible CVE leads. Scan measurements and AI conclusions stay separate so the tool can show what it observed without presenting a model's guess as a fact.
 
-The current implementation concurrently scans selected TCP or UDP ports on one IPv4 address, collects limited banners, probes HTTP on port 80, and can ask DeepSeek to research public CVEs and exploit references using a web search tool. It does not yet offer Nmap's range of scan methods, host discovery, broad service fingerprinting, or exhaustive vulnerability detection. Building it is also a way to learn Rust networking, I/O, timeouts, and error handling.
+The current implementation scans one or more IPv4 targets, with concurrent TCP or UDP probes within each host, collects limited banners, probes HTTP on port 80, and can ask DeepSeek to research public CVEs and exploit references using a web search tool. It does not yet offer Nmap's range of scan methods, host discovery, broad service fingerprinting, or exhaustive vulnerability detection. Building it is also a way to learn Rust networking, I/O, timeouts, and error handling.
 
 ## How a run works
 
-1. The CLI validates the required IPv4 target and any supplied options. Omitted options default to TCP, all ports from 1 through 65535, a timeout of 1000 ms, and up to 256 concurrent probes.
-2. The common scanner entry point schedules the selected transport through bounded Tokio tasks on a shared runtime. UDP sends an empty datagram to each selected port and waits for a response. For each TCP port, the scanner attempts a TCP connection and records its elapsed connection time and outcome in a `ScanResult`.
+1. The CLI validates every entry in the required IPv4 target list and any supplied options, then removes duplicate targets while retaining their first occurrence. Omitted options default to TCP, all ports from 1 through 65535, a timeout of 1000 ms, and up to 256 concurrent probes.
+2. Hosts are processed one at a time. For each host, the common scanner entry point schedules the selected transport through bounded Tokio tasks on a shared runtime. UDP sends an empty datagram to each selected port and waits for a response. For each TCP port, the scanner attempts a TCP connection and records its elapsed connection time and outcome in a `ScanResult`.
 3. On an open port other than 80, it reads a passive banner and stores the collected bytes separately from the reason reading stopped. On open port 80, it sends an HTTP `HEAD` probe using a separate connection.
-4. Progress is reported on stderr while ports are scanned. The measured table prints after scanning and before AI research. Full-range scans show only confirmed open ports; explicit `--ports` lists show every selected outcome. AI configuration is validated before scanning; configuration errors disable the AI step without stopping the scan.
-5. With `--ai`, the program sends bounded observations to DeepSeek through Rig. With a Brave Search key configured, the agent researches CVEs, vendor and distribution advisories, and Exploit-DB references using a public web search tool. An optional local advisory file can supplement the web evidence. Interpretation and retrieved source links appear separately from measurements. AI or search failures leave the scan report visible.
+4. Progress is reported on stderr while ports are scanned. Each host’s measured table prints after its scan and before its optional AI research. Full-range scans and `--ports` lists containing ranges show only confirmed open ports; lists of individual ports show every selected outcome. AI configuration is validated before scanning; configuration errors disable the AI step without stopping the scan.
+5. With `--ai`, the program sends bounded observations for the current host to DeepSeek through Rig before moving to the next host. With a Brave Search key configured, the agent researches CVEs, vendor and distribution advisories, and Exploit-DB references using a public web search tool. An optional local advisory file can supplement the web evidence. Interpretation and retrieved source links appear separately from measurements. AI or search failures leave the scan report visible.
 
 The startup banner shows a crab, the tool name, and the program version.
 
@@ -44,13 +44,23 @@ Cargo installs binaries in a directory usually named `~/.cargo/bin`. That direct
 
 Rig is pinned to version 0.42.0, and `Cargo.lock` records the resolved dependencies.
 
+### Multiple targets
+
+```bash
+rmap --target 192.0.2.10,192.0.2.11,192.0.2.10 --ports 22,80-82
+```
+
+This scans `192.0.2.10` once, then `192.0.2.11` once. Each host gets its own progress, measured report, and optional AI interpretation. All target entries are validated before scanning; invalid addresses and empty entries are rejected. Hosts run sequentially, while the configured concurrency applies to ports within the current host. With `--ai`, each unique host has a separate research session, timeout, and search budget; observations from different hosts are not combined.
+
+The existing single-address syntax still works. CIDR subnet expansion and simultaneous host scanning are not implemented. A scan-level error terminates the run; an AI analysis failure is reported without preventing the next host’s scan.
+
 ### CLI options
 
 | Option | Meaning |
 | --- | --- |
 | `--tcp` | Run the TCP connect scanner; default when neither transport flag is supplied |
 | `--udp` | Send an empty UDP probe to each selected port and wait for a response |
-| `--target IPV4` | IPv4 address to scan; hostnames and IPv6 are not accepted |
+| `--target IPV4[,IPV4...]` | One or more comma-separated IPv4 addresses; duplicates are scanned once, in first-occurrence order; hostnames, IPv6, and CIDR are not accepted |
 | `--ports LIST` | Comma-separated ports and inclusive ranges, such as `22,80-82,443`; omitting it selects all ports from 1 through 65535 |
 | `--exclude-ports LIST` | Ports and inclusive ranges to remove from an earlier explicit `--ports` list; may be given once and must leave at least one selected port |
 | `--timeout-ms MILLISECONDS` | Optional positive timeout for network operations; defaults to `1000` ms |
@@ -74,7 +84,7 @@ For mixed ports and ranges:
 rmap --target 192.0.2.21 --ports 22,80-84,443 --exclude-ports 81-83
 ```
 
-This selects ports 22, 80, 84, and 443. An explicit `--ports 1-65535` also works, but keeps explicit-list reporting with all outcomes; omitting `--ports` keeps the open-only full-scan report.
+This selects ports 22, 80, 84, and 443. Any `--ports` list containing a range shows only confirmed open ports, including mixed lists and `--ports 1-65535`. All selected ports are still scanned. Lists of individual ports, such as `--ports 22,80,443`, show all outcomes.
 
 The minimal command scans all TCP ports with a 1000 ms timeout:
 
@@ -94,7 +104,7 @@ Omit `--ports` to scan the full range, from port 1 through 65535, reported in as
 rmap --tcp --target 192.0.2.21 --timeout-ms 1000
 ```
 
-`192.0.2.21` is a documentation address; substitute your authorized target. The same default applies to `--udp`. Scanning uses up to 256 concurrent probes by default for both TCP and UDP, including explicit port lists. Startup output shows the port count, timeout, and concurrency limit; progress reports completed ports, percentage, last port and elapsed time. Tasks report completions immediately, while the final table retains the requested port order. Actual duration depends on network responses, banner waits, and available system resources. Use an explicit `--ports` list for a short scan. With `--ai`, research starts after the full scan completes and still uses at most eight measured outcomes, prioritizing open ports.
+`192.0.2.21` is a documentation address; substitute your authorized target. The same default applies to `--udp`. Scanning uses up to 256 concurrent probes by default for both TCP and UDP, including explicit port lists. Startup output shows the port count, timeout, and concurrency limit; progress reports completed ports, percentage, last port and elapsed time. Tasks report completions immediately, while the final table retains the requested port order. Actual duration depends on network responses, banner waits, and available system resources. Use an explicit `--ports` list for a short scan. With `--ai`, research starts after each host’s scan completes and uses at most eight outcomes from that host, prioritizing open ports.
 
 Tune the concurrency limit with `--concurrency`; `1` restores sequential scanning:
 
@@ -105,7 +115,7 @@ rmap --target 192.0.2.21 --ports 22,80,443 --concurrency 1
 
 Higher limits are not always faster: socket limits, packet loss, and target rate limiting can increase errors or timeouts. Lower the limit if these occur. The limit includes connection, banner, and HTTP probe waits; rmap uses asynchronous TCP/UDP sockets and runs only the configured number of active tasks on a shared, single-thread Tokio runtime. Waiting for a network response does not occupy a dedicated OS thread. Tokio was already a dependency; networking, I/O, and synchronization features are now enabled.
 
-When `--ports` is omitted, the table shows only ports measured as `open`, plus the number shown and total scanned. This includes UDP only when a response was received; silent `open|filtered` ports are hidden. If none are open, an explicit message says so. Hidden rows remain in the measured result collection and can still enter the bounded AI context. Explicit `--ports` lists continue to display every outcome, including closed, filtered, uncertain, and error results.
+When `--ports` is omitted or its value contains a range, the table shows only ports measured as `open`, plus the number shown and total scanned. This includes UDP only when a response was received; silent `open|filtered` ports are hidden. If none are open, an explicit message says so. Hidden rows remain in the measured result collection and can still enter the bounded AI context. Explicit lists of individual ports continue to display every outcome, including closed, filtered, uncertain, and error results. A range in `--exclude-ports` alone does not change the display mode.
 
 Async reduces thread overhead; it does not shorten the configured timeout or bypass network and socket limits. The default concurrency remains 256 and the maximum remains 1024.
 

@@ -1,5 +1,6 @@
 //! CLI parsing and input validation.
 
+use std::collections::HashSet;
 use std::net::Ipv4Addr;
 use std::time::Duration;
 
@@ -8,11 +9,12 @@ pub use config::CliConfig;
 
 use crate::model::{DEFAULT_CONCURRENCY, MAX_CONCURRENCY, ScanMode};
 
-pub const USAGE: &str = "Usage: rmap --target IPV4 [--tcp | --udp] [--ports LIST] [--exclude-ports LIST] [--timeout-ms MILLISECONDS] [--concurrency N] [--ai]\nDefaults: TCP, all ports from 1 to 65535, timeout 1000 ms, concurrency 256 (1-1024).\nFull-range scans show only open ports; explicit --ports lists show all outcomes.\nPort lists accept individual ports and inclusive ranges, e.g. 22,80-82,443.\n--exclude-ports requires an earlier --ports list and must leave at least one port.";
+pub const USAGE: &str = "Usage: rmap --target IPV4[,IPV4...] [--tcp | --udp] [--ports LIST] [--exclude-ports LIST] [--timeout-ms MILLISECONDS] [--concurrency N] [--ai]\nDefaults: TCP, all ports from 1 to 65535, timeout 1000 ms, concurrency 256 (1-1024).\nFull-range scans and --ports lists containing ranges show only open ports; individual-port lists show all outcomes.\nPort lists accept individual ports and inclusive ranges, e.g. 22,80-82,443.\nTargets are scanned once each, in first-occurrence order.\n--exclude-ports requires an earlier --ports list and must leave at least one port.";
 
 pub fn parse_cli(args: &[String]) -> Result<CliConfig, String> {
     let mut target = None;
     let mut ports = None;
+    let mut open_only = true;
     let mut exclude_ports_seen = false;
     let mut timeout = None;
     let mut use_ai = false;
@@ -34,16 +36,15 @@ pub fn parse_cli(args: &[String]) -> Result<CliConfig, String> {
             }
             "--target" => {
                 let value = args.next().ok_or("Missing value for --target")?;
-                let address = value
-                    .parse::<Ipv4Addr>()
-                    .map_err(|_| "--target must be an IPv4 address")?;
-                if target.replace(address.to_string()).is_some() {
+                let address = parsing_target_list(value)?;
+                if target.replace(address).is_some() {
                     return Err("--target was given more than once".to_string());
                 }
             }
             "--ports" => {
                 let value = args.next().ok_or("Missing value for --ports")?;
                 let parsed_ports = parsing_ports_function(value)?;
+                open_only = value.contains('-');
                 if ports.replace(parsed_ports).is_some() {
                     return Err("--ports was given more than once".to_string());
                 }
@@ -111,7 +112,7 @@ pub fn parse_cli(args: &[String]) -> Result<CliConfig, String> {
 
     Ok(CliConfig {
         target: target.ok_or("Missing --target")?,
-        full_scan: ports.is_none(),
+        open_only,
         ports: ports.unwrap_or_else(|| (1..=u16::MAX).map(|port| port.to_string()).collect()),
         timeout: timeout.unwrap_or(Duration::from_millis(1000)),
         mode: mode.unwrap_or(ScanMode::Tcp),
@@ -147,6 +148,20 @@ fn parsing_ports_function(s: &str) -> Result<Vec<String>, String> {
         }
     }
     Ok(ports)
+}
+
+fn parsing_target_list(targets: &str) -> Result<Vec<String>, String> {
+    let mut valid_targets = Vec::new();
+    let mut seen = HashSet::new();
+    for target in targets.split(',') {
+        let address = target
+            .parse::<Ipv4Addr>()
+            .map_err(|_| format!("Invalid IPv4 address: {target}"))?;
+        if seen.insert(address) {
+            valid_targets.push(address.to_string());
+        }
+    }
+    Ok(valid_targets)
 }
 
 #[cfg(test)]

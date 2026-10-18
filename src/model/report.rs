@@ -3,8 +3,8 @@
 use crate::model::{AiAnalysis, PortStatus, ScanResult};
 use crate::utils::banner::escape_bytes;
 
-pub fn print_results(target: &str, results: &[ScanResult], full_scan: bool) {
-    write_results(&mut std::io::stdout().lock(), target, results, full_scan)
+pub fn print_results(target: &str, results: &[ScanResult], open_only: bool) {
+    write_results(&mut std::io::stdout().lock(), target, results, open_only)
         .expect("Failed to print scan results");
 }
 
@@ -12,7 +12,7 @@ fn write_results(
     output: &mut impl std::io::Write,
     target: &str,
     results: &[ScanResult],
-    full_scan: bool,
+    open_only: bool,
 ) -> std::io::Result<()> {
     writeln!(output, "Scan results for {target}\n")?;
     writeln!(
@@ -24,12 +24,12 @@ fn write_results(
 
     let mut displayed = 0;
     for result in results {
-        if !full_scan || result.status == PortStatus::Open {
+        if !open_only || result.status == PortStatus::Open {
             writeln!(output, "{}", format_result(result))?;
             displayed += 1;
         }
     }
-    if full_scan {
+    if open_only {
         if displayed == 0 {
             writeln!(
                 output,
