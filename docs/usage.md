@@ -18,7 +18,13 @@ Cargo's installation directory, usually `~/.cargo/bin`, must be on `PATH`. Reins
 
 ## Select TCP or UDP
 
-Only a numeric IPv4 `--target` is required. Omit the transport flags to use TCP, or select `--udp` explicitly. The flags cannot be combined or repeated. Omit `--timeout-ms` to use 1000 milliseconds, or supply a positive integer to override it. Optionally select comma-separated ports and inclusive ranges from 1 through 65535 with `--ports`, for example `22,80-82,443`. Omitting `--ports` selects all 65535 ports in ascending order. An explicitly empty value or a `--ports` flag without a value is rejected. Hostnames and IPv6 are not accepted. TCP and UDP probes run concurrently, with up to 256 active async probes by default. The final report preserves the supplied port order, regardless of completion order.
+Only `--target` is required; it accepts one numeric IPv4 address or a comma-separated list. Omit the transport flags to use TCP, or select `--udp` explicitly. The flags cannot be combined or repeated. Omit `--timeout-ms` to use 1000 milliseconds, or supply a positive integer to override it. Optionally select comma-separated ports and inclusive ranges from 1 through 65535 with `--ports`, for example `22,80-82,443`. Omitting `--ports` selects all 65535 ports in ascending order. An explicitly empty value or a `--ports` flag without a value is rejected. Hostnames and IPv6 are not accepted. TCP and UDP probes run concurrently, with up to 256 active async probes by default. The final report preserves the supplied port order, regardless of completion order.
+
+```bash
+rmap --target 192.0.2.10,192.0.2.11,192.0.2.10 --ports 22,80-82
+```
+
+Targets are deduplicated in first-occurrence order: this scans `192.0.2.10` once and `192.0.2.11` once. Every entry is validated before scanning; empty entries, malformed addresses, and CIDR input are rejected. Hosts are processed sequentially, with concurrent ports and separate progress and reports per host. Optional AI research runs after each host’s measured report, using only that host’s results and a separate session budget. An AI failure does not stop later hosts; a scan-level failure terminates the run.
 
 To remove selected ports, supply `--exclude-ports` after an explicit `--ports` list:
 
@@ -32,7 +38,7 @@ The selected list becomes 80,443; the same exclusion behavior applies to UDP. Re
 rmap --target 192.0.2.21 --ports 22,80-84,443 --exclude-ports 81-83
 ```
 
-This scans 22,80,84,443. An explicit `--ports 1-65535` selects the full numeric range but still displays all outcomes, because an explicit port list was supplied. Omit `--ports` for the open-only full-scan report.
+This scans 22,80,84,443. Any `--ports` list containing a range displays only confirmed open ports, including this mixed list and `--ports 1-65535`. All selected ports are still probed.
 
 The minimal command uses TCP, ports 1–65535, and a 1000 ms timeout:
 
@@ -66,7 +72,7 @@ rmap --target 192.0.2.21 --concurrency 256
 
 More concurrent probes do not guarantee better performance. Network latency, banner waits, socket limits, and target rate limiting affect speed and observed timeouts. Reduce concurrency when resource errors or excessive timeouts appear.
 
-When `--ports` is omitted, only confirmed `open` ports are printed in the measured table. UDP `open|filtered` rows are hidden. The report gives the number of open ports shown and total scanned, or says no open ports were found. This filters presentation only: all outcomes remain available for progress and bounded AI context. With an explicit `--ports` list, every selected outcome is displayed.
+When `--ports` is omitted or its value contains a range, only confirmed `open` ports are printed in the measured table. UDP `open|filtered` rows are hidden. The report gives the number of open ports shown and total scanned, or says no open ports were found. This filters presentation only: all outcomes remain available for progress and bounded AI context. With an explicit list of individual ports, every selected outcome is displayed. A range in exclusions alone does not change this mode.
 
 TCP connects and then collects a passive banner, or sends an HTTP `HEAD` probe on open port 80. UDP sends an empty datagram; protocol-specific UDP requests and service identification are not implemented. A UDP timeout is reported as `open|filtered` because a listening service may ignore that datagram.
 

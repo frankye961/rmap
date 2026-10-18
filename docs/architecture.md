@@ -1,12 +1,13 @@
 # Architecture
 
-rmap is a Rust network scanner inspired by Nmap, with optional AI research into observed services, possible CVEs, and public exploit references. It currently scans selected ports concurrently through bounded Tokio tasks on a single IPv4 address using TCP connect attempts or empty UDP datagrams.
+rmap is a Rust network scanner inspired by Nmap, with optional AI research into observed services, possible CVEs, and public exploit references. It currently scans selected ports concurrently through bounded Tokio tasks for each unique IPv4 target using TCP connect attempts or empty UDP datagrams. Hosts are processed sequentially.
 
 ## Flow through the application
 
 ```mermaid
 flowchart TD
-    CLI[CLI validation] --> Entry[scan/mod.rs]
+    CLI[CLI validation and target deduplication] --> Hosts[main.rs: each unique target]
+    Hosts --> Entry[scan/mod.rs]
     Entry --> Pool[worker.rs: bounded async tasks]
     Pool --> TCP[tcp.rs: TCP connect and banner reads]
     Pool --> UDP[udp.rs: empty UDP probes]
@@ -28,14 +29,14 @@ flowchart TD
     Evidence --> AIReport
 ```
 
-`main.rs` parses CLI arguments, validates optional AI settings, and calls the common scan entry point with a progress callback. The collector invokes the callback on the caller thread as probes finish, while presentation remains in `src/model/progress.rs`. Main prints the final measured table after scanning, then requests AI analysis when configured. AI configuration failures are reported early without preventing scanning. The scanner has no dependency on the AI service. AI configuration and failures cannot change measured port outcomes or prevent the initial report from being displayed.
+`main.rs` parses CLI arguments, validates optional AI settings once, then loops over the validated target list. For each target it creates progress, calls the common scan entry point, prints measured results, and optionally requests AI interpretation for that host. The collector invokes the callback on the caller thread as probes finish, while presentation remains in `src/model/progress.rs`. AI settings are borrowed across hosts; measured results and interpretations are not combined across hosts. AI configuration failures are reported early without preventing scanning. The scanner has no dependency on the AI service. AI configuration and failures cannot change measured port outcomes or prevent the initial report from being displayed.
 
 ## Module responsibilities
 
 | Module | Responsibility |
 | --- | --- |
 | `src/cli/mod.rs` | Validate input; default to TCP, ports 1–65535, 1000 ms, and 256 concurrent probes; reject conflicting transport flags |
-| `src/cli/config.rs` | Validated `CliConfig` settings, including concurrency and whether `--ports` was omitted |
+| `src/cli/config.rs` | Validated `CliConfig` settings, including concurrency and open-only reporting selection |
 | `src/scan/mod.rs` | Dispatch TCP or UDP through one entry point |
 | `src/scan/worker.rs` | Schedule bounded async tasks on a shared Tokio runtime, report completions, and restore input order |
 | `src/scan/tcp.rs` | TCP connection attempts, status classification, bounded passive reads, and collected-banner identification |
@@ -65,7 +66,9 @@ Protocol parsers retain their format-specific rules. Shared byte operations live
 - `WebSource` holds a title, URL, and bounded snippet returned by a search request. It is evidence retrieved by the application independently of generated prose.
 - `CveCandidate` holds a local advisory matched to observed product/version text and the associated port and transport.
 
-`CliConfig` in `src/cli/config.rs` holds validated target, ports, timeout, transport, concurrency, full-scan display selection, and the AI enable flag. AI connection settings remain separate in `AiConfig`.
+`CliConfig` in `src/cli/config.rs` holds a validated target vector, ports, timeout, transport, concurrency, open-only display selection, and the AI enable flag. AI connection settings remain separate in `AiConfig`.
+
+`parsing_target_list` validates each comma-separated entry as an `Ipv4Addr`. A standard-library `HashSet` tracks membership while the output vector preserves first-occurrence order. Duplicate targets are omitted before scanning, so they receive one scan/report and at most one optional AI session each. Empty and invalid entries still fail validation, including when they follow duplicate entries. The scanner entry point continues to handle one host at a time. CIDR expansion and concurrent host scheduling are not implemented.
 
 CLI port selection and exclusions share `parsing_ports_function` in `src/cli/mod.rs`. It accepts comma-separated individual ports and inclusive ranges, validates nonzero `u16` endpoints and ascending bounds, then expands them to the configuration's port strings. Expansion preserves order and duplicates. `--exclude-ports` requires an earlier explicit `--ports` list and removes matching entries without changing the order of remaining ports. Exclusions cannot remove every selected port. Range parsing and exclusion behavior are tested without network calls.
 
@@ -77,7 +80,7 @@ TCP connect and banner collection use Tokio sockets and deadlines. UDP uses a To
 
 The collector invokes progress callbacks on the caller thread in task completion order, then assembles the final vector in requested order, including duplicate ports. Task IDs track each port so a task panic becomes an undetermined result without discarding other measurements. Dropping the task set cancels unfinished work.
 
-Reporting filters to confirmed open ports only when `--ports` was omitted. Explicit port lists retain all rows. Empty open-port reports have an explicit message. The result vector stays intact, and AI still receives bounded context selected from all measured outcomes.
+Reporting filters to confirmed open ports when `--ports` was omitted or contains at least one range. Explicit lists of individual ports retain all rows. `CliConfig.open_only` selects this presentation mode; exclusion ranges alone do not enable it. Empty open-port reports have an explicit message. The result vector stays intact, and AI still receives bounded context selected from all measured outcomes.
 
 ## Measured outcomes and timing
 

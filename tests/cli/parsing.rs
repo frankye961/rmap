@@ -28,7 +28,7 @@ fn selects_each_transport() {
             ..
         } = parse_cli(&arguments(&[flag])).unwrap();
         assert_eq!(mode, expected);
-        assert_eq!(target, "127.0.0.1");
+        assert_eq!(target, ["127.0.0.1"]);
         assert_eq!(ports, ["22", "80"]);
         assert_eq!(timeout.as_millis(), 1000);
         assert!(!ai);
@@ -55,9 +55,9 @@ fn omitted_ports_selects_the_complete_range_for_both_transports() {
             .map(String::from)
             .collect();
         let CliConfig {
-            ports, full_scan, ..
+            ports, open_only, ..
         } = parse_cli(&args).unwrap();
-        assert!(full_scan);
+        assert!(open_only);
         assert_eq!(ports.len(), 65_535);
         for (expected, actual) in (1..=u16::MAX).zip(&ports) {
             assert_eq!(*actual, expected.to_string());
@@ -109,7 +109,7 @@ fn target_alone_uses_tcp_all_ports_and_one_second_timeout() {
         use_ai: ai,
         ..
     } = parse_cli(&args).unwrap();
-    assert_eq!(target, "127.0.0.1");
+    assert_eq!(target, ["127.0.0.1"]);
     assert_eq!(mode, ScanMode::Tcp);
     assert_eq!(timeout.as_millis(), 1000);
     assert_eq!(ports.len(), 65_535);
@@ -192,7 +192,7 @@ fn rejects_invalid_missing_or_repeated_concurrency() {
 #[test]
 fn explicit_port_lists_keep_the_complete_report_for_both_transports() {
     for mode in ["--tcp", "--udp"] {
-        assert!(!parse_cli(&arguments(&[mode])).unwrap().full_scan);
+        assert!(!parse_cli(&arguments(&[mode])).unwrap().open_only);
     }
 }
 
@@ -204,7 +204,7 @@ fn exclusions_remove_only_selected_ports_and_preserve_order_for_both_transports(
         args[index + 1] = "443,22,80,443,65535".into();
         let config = parse_cli(&args).unwrap();
         assert_eq!(config.ports, ["443", "80", "443"]);
-        assert!(!config.full_scan);
+        assert!(!config.open_only);
     }
 }
 
@@ -336,18 +336,93 @@ fn both_transports_expand_selected_ranges_and_apply_mixed_range_exclusions() {
         args[index + 1] = "22,80-84,443".into();
         let config = parse_cli(&args).unwrap();
         assert_eq!(config.ports, ["22", "80", "84", "443"]);
-        assert!(!config.full_scan);
+        assert!(config.open_only);
     }
 }
 
 #[test]
-fn explicit_full_port_range_keeps_explicit_list_reporting() {
+fn explicit_full_port_range_shows_only_open_ports() {
     let mut args = arguments(&[]);
     let index = args.iter().position(|arg| arg == "--ports").unwrap();
     args[index + 1] = "1-65535".into();
     let config = parse_cli(&args).unwrap();
-    assert!(!config.full_scan);
+    assert!(config.open_only);
     assert_eq!(config.ports.len(), 65_535);
     assert_eq!(config.ports.first().map(String::as_str), Some("1"));
     assert_eq!(config.ports.last().map(String::as_str), Some("65535"));
+}
+
+#[test]
+fn parses_unique_targets_in_first_occurrence_order_for_both_transports() {
+    for mode in ["--tcp", "--udp"] {
+        let mut args = arguments(&[mode]);
+        let index = args.iter().position(|arg| arg == "--target").unwrap();
+        args[index + 1] = "192.0.2.11,192.0.2.10,192.0.2.11".into();
+        let config = parse_cli(&args).unwrap();
+        assert_eq!(config.target, ["192.0.2.11", "192.0.2.10"]);
+        assert_eq!(config.ports, ["22", "80"]);
+    }
+}
+
+#[test]
+fn rejects_invalid_or_empty_target_entries_before_scanning() {
+    for value in [
+        "",
+        ",192.0.2.10",
+        "192.0.2.10,",
+        "192.0.2.10,,192.0.2.11",
+        "192.0.2.10,192.0.2.10,",
+        "192.0.2.10,192.0.2.10,invalid",
+        "192.0.2.10,999.0.0.1",
+        "192.0.2.10,localhost",
+        "192.0.2.10,::1",
+        "192.0.2.0/24",
+    ] {
+        let mut args = arguments(&[]);
+        let index = args.iter().position(|arg| arg == "--target").unwrap();
+        args[index + 1] = value.into();
+        assert!(
+            parse_cli(&args).is_err(),
+            "accepted invalid targets: {value:?}"
+        );
+    }
+    let args = arguments(&["--target", "192.0.2.11"]);
+    assert!(
+        parse_cli(&args)
+            .unwrap_err()
+            .contains("--target was given more than once")
+    );
+}
+
+#[test]
+fn any_selected_port_range_enables_open_only_reporting_for_both_transports() {
+    for mode in ["--tcp", "--udp"] {
+        for selection in ["80-82", "22,80-82,443", "80-80"] {
+            let mut args = arguments(&[mode]);
+            let index = args.iter().position(|arg| arg == "--ports").unwrap();
+            args[index + 1] = selection.into();
+            let config = parse_cli(&args).unwrap();
+            assert!(
+                config.open_only,
+                "all outcomes shown for range: {selection}"
+            );
+            assert!(!config.ports.is_empty());
+        }
+        let config = parse_cli(&arguments(&[mode, "--exclude-ports", "22-22"])).unwrap();
+        assert!(
+            !config.open_only,
+            "exclusion ranges must not change individual-list reporting"
+        );
+        assert_eq!(config.ports, ["80"]);
+    }
+}
+
+#[test]
+fn repeated_target_is_scheduled_only_once_for_both_transports() {
+    for mode in ["--tcp", "--udp"] {
+        let mut args = arguments(&[mode]);
+        let index = args.iter().position(|arg| arg == "--target").unwrap();
+        args[index + 1] = "192.0.2.10,192.0.2.10,192.0.2.10".into();
+        assert_eq!(parse_cli(&args).unwrap().target, ["192.0.2.10"]);
+    }
 }

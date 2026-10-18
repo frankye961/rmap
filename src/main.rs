@@ -38,9 +38,9 @@ fn main() {
     }
 
     let cli::CliConfig {
-        target,
+        target: targets,
         ports,
-        full_scan,
+        open_only,
         timeout,
         mode,
         use_ai,
@@ -64,32 +64,34 @@ fn main() {
     } else {
         None
     };
-    let mut progress =
-        model::progress::ScanProgress::new(&target, mode, ports.len(), timeout, concurrency);
     let port_refs: Vec<&str> = ports.iter().map(String::as_str).collect();
-    let results = match scan::scan(
-        mode,
-        target.clone(),
-        timeout,
-        &port_refs,
-        concurrency,
-        |completed, result| progress.update(completed, result),
-    ) {
-        Ok(results) => results,
-        Err(error) => {
-            eprintln!("{error}");
-            process::exit(1);
-        }
-    };
-    model::report::print_results(&target, &results, full_scan);
-    if let Some(config) = ai_config {
-        eprintln!(
-            "Starting AI web research and interpretation (session timeout: {} ms).",
-            config.timeout.as_millis()
-        );
-        match ai::service::analyze(&config, &results) {
-            Ok(analysis) => model::report::print_ai_analysis(&analysis),
-            Err(error) => eprintln!("\nAI analysis unavailable: {error}"),
+    for target in targets {
+        let mut progress =
+            model::progress::ScanProgress::new(&target, mode, ports.len(), timeout, concurrency);
+        let results = match scan::scan(
+            mode,
+            target.clone(),
+            timeout,
+            &port_refs,
+            concurrency,
+            |completed, result| progress.update(completed, result),
+        ) {
+            Ok(results) => results,
+            Err(error) => {
+                eprintln!("{error}");
+                process::exit(1);
+            }
+        };
+        model::report::print_results(&target, &results, open_only);
+        if let Some(config) = ai_config.as_ref() {
+            eprintln!(
+                "Starting AI web research and interpretation for {target} (session timeout: {} ms).",
+                config.timeout.as_millis()
+            );
+            match ai::service::analyze(config, &results) {
+                Ok(analysis) => model::report::print_ai_analysis(&analysis),
+                Err(error) => eprintln!("\nAI analysis unavailable: {error}"),
+            }
         }
     }
 }

@@ -90,20 +90,20 @@ fn measured_results() -> Vec<ScanResult> {
 }
 
 #[test]
-fn only_full_scans_hide_non_open_rows_without_changing_measurements() {
+fn only_open_onlys_hide_non_open_rows_without_changing_measurements() {
     let results = measured_results();
-    for full_scan in [false, true] {
+    for open_only in [false, true] {
         let mut output = Vec::new();
-        super::write_results(&mut output, "192.0.2.21", &results, full_scan).unwrap();
+        super::write_results(&mut output, "192.0.2.21", &results, open_only).unwrap();
         let output = String::from_utf8(output).unwrap();
         assert!(output.contains("1/udp"));
         for port in 2..=5 {
-            assert_eq!(output.contains(&format!("{port}/udp")), !full_scan);
+            assert_eq!(output.contains(&format!("{port}/udp")), !open_only);
         }
-        assert_eq!(output.contains("open|filtered ="), !full_scan);
+        assert_eq!(output.contains("open|filtered ="), !open_only);
         assert_eq!(
             output.contains("Open ports shown: 1; ports scanned: 5."),
-            full_scan
+            open_only
         );
     }
     assert_eq!(results.len(), 5);
@@ -111,7 +111,7 @@ fn only_full_scans_hide_non_open_rows_without_changing_measurements() {
 }
 
 #[test]
-fn full_scan_without_open_ports_prints_an_explicit_message() {
+fn open_only_without_open_ports_prints_an_explicit_message() {
     let results = measured_results();
     let mut output = Vec::new();
     super::write_results(&mut output, "192.0.2.21", &results[1..], true).unwrap();

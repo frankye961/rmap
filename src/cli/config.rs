@@ -6,9 +6,9 @@ use crate::model::ScanMode;
 
 #[derive(Debug)]
 pub struct CliConfig {
-    pub target: String,
+    pub target: Vec<String>,
     pub ports: Vec<String>,
-    pub full_scan: bool,
+    pub open_only: bool,
     pub timeout: Duration,
     pub mode: ScanMode,
     pub use_ai: bool,
