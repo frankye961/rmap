@@ -94,7 +94,7 @@ fn extracts_vsftpd_product_and_version() {
 #[test]
 fn ftp_does_not_match_generic_greetings_or_malformed_versions() {
     for banner in [
-        b"220 mail.example.test ESMTP ready\r\n".as_slice(),
+        b"220 mail.example.test ready\r\n".as_slice(),
         b"220 (vsFTPd 3.0.5)",
         b"220 (vsFTPd 3.0.5\r\n",
         b"220 (vsFTPd )\r\n",
@@ -113,4 +113,123 @@ fn filezilla_keeps_its_own_product_and_optional_version() {
     let info = identify_service(b"220-FileZilla Server\r\n").unwrap();
     assert_eq!(info.product.as_deref(), Some("FileZilla Server"));
     assert!(info.version.is_none());
+}
+
+#[test]
+fn recognizes_smtp_without_guessing_product_or_version() {
+    for banner in [
+        b"220 mail.example.test ESMTP ready\r\n".as_slice(),
+        b"220 mail.example.test SMTP ready\r\n",
+        b"220-mail.example.test ESMTP ready\r\n",
+        b"220 mail.example.test ESMTP\r\n",
+        b"220 mail.example.test ESMTP OtherMail 1.2.3\r\n",
+    ] {
+        let info = identify_service(banner).unwrap();
+        assert_eq!(info.transport, ScanMode::Tcp);
+        assert_eq!(info.service.as_deref(), Some("smtp"));
+        assert!(info.product.is_none());
+        assert!(info.version.is_none());
+    }
+}
+
+#[test]
+fn extracts_smtp_product_and_adjacent_version_after_hostname() {
+    for (banner, product, version) in [
+        (
+            "220 mail.example.test ESMTP Postfix 3.9.0\r\n",
+            "Postfix",
+            "3.9.0",
+        ),
+        ("220 mail.example.test ESMTP Exim 4.98\r\n", "Exim", "4.98"),
+        (
+            "220-mail.example.test SMTP Exim 4.98-1 ready\r\n",
+            "Exim",
+            "4.98-1",
+        ),
+        (
+            "220 123.example.test ESMTP Postfix 3.9.0 ready\r\n",
+            "Postfix",
+            "3.9.0",
+        ),
+    ] {
+        let info = identify_service(banner.as_bytes()).unwrap();
+        assert_eq!(info.service.as_deref(), Some("smtp"));
+        assert_eq!(info.product.as_deref(), Some(product));
+        assert_eq!(info.version.as_deref(), Some(version));
+    }
+}
+
+#[test]
+fn smtp_keeps_known_product_when_version_is_missing_or_invalid() {
+    for product in ["Postfix", "Exim"] {
+        for suffix in ["", " ready", " ready 4.98", " 4.98;", " v4.98"] {
+            let banner = format!("220 mail.example.test ESMTP {product}{suffix}\r\n");
+            let info = identify_service(banner.as_bytes()).unwrap();
+            assert_eq!(info.service.as_deref(), Some("smtp"));
+            assert_eq!(info.product.as_deref(), Some(product));
+            assert!(info.version.is_none(), "invented a version for {banner:?}");
+        }
+    }
+}
+
+#[test]
+fn rejects_missing_smtp_evidence_invalid_reply_codes_and_incomplete_lines() {
+    for banner in [
+        b"220 mail.example.test ready\r\n".as_slice(),
+        b"220 mail.example.test Postfix 3.9.0\r\n",
+        b"250 mail.example.test ESMTP Postfix 3.9.0\r\n",
+        b"2200 mail.example.test ESMTP Postfix 3.9.0\r\n",
+        b"mail.example.test ESMTP Postfix 3.9.0\r\n",
+        b"220 mail.example.test NOTSMTP Postfix 3.9.0\r\n",
+        b"220 mail.example.test ESMTPwrong Exim 4.98\r\n",
+        b"220 mail.example.test ESMTP Postfix 3.9.0",
+        b"220 mail.example.test ESMTP Postfix 3.9.0\n",
+        b"220 mail.example.test ESMTP Postfix 3.9.0\xff\r\n",
+    ] {
+        assert!(identify_service(banner).is_none(), "accepted {banner:?}");
+    }
+}
+
+#[test]
+fn smtp_does_not_replace_ftp_identification_for_shared_220_reply_code() {
+    for banner in [
+        b"220 (vsFTPd 3.0.5)\r\n".as_slice(),
+        b"220-FileZilla Server version 1.8.2\r\n",
+    ] {
+        assert!(super::identify_smtp(banner).is_none());
+        assert_eq!(
+            identify_service(banner).unwrap().service.as_deref(),
+            Some("ftp")
+        );
+    }
+}
+
+#[test]
+fn smtp_collection_on_nonstandard_port_preserves_scan_measurements() {
+    let bytes = b"220 mail.example.test ESMTP Exim 4.98\r\n".to_vec();
+    let mut result = ScanResult {
+        port: 2525,
+        transport: ScanMode::Tcp,
+        status: PortStatus::Open,
+        service: None,
+        elapsed: Duration::from_millis(17),
+        error: None,
+        observation: Some("peer closed connection".into()),
+        banner: Some(bytes.clone()),
+        service_information: None,
+    };
+    collect_banner(&mut result);
+    assert_eq!(result.service.as_deref(), Some("smtp"));
+    let info = result.service_information.as_ref().unwrap();
+    assert_eq!(info.product.as_deref(), Some("Exim"));
+    assert_eq!(info.version.as_deref(), Some("4.98"));
+    assert_eq!(result.port, 2525);
+    assert_eq!(result.status, PortStatus::Open);
+    assert_eq!(result.elapsed, Duration::from_millis(17));
+    assert_eq!(result.banner.as_deref(), Some(bytes.as_slice()));
+    assert_eq!(
+        result.observation.as_deref(),
+        Some("peer closed connection")
+    );
+    assert!(result.error.is_none());
 }

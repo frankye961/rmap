@@ -106,6 +106,20 @@ Each report row includes the port, connection state, an optional service label, 
 
 For most open TCP ports, the scanner passively reads up to 512 bytes, stopping at a newline, a read timeout, a closed connection, or the byte limit. `ScanResult.banner` preserves the collected bytes, while `observation` records the stop reason separately. A complete supported SSH identification line gives the port an `ssh` service label. For OpenSSH, identification also stores the product, software version, and optional distribution comments separately; for example, `OpenSSH`, `10.0p2`, and `Debian-7+deb13u4`. Unknown SSH implementations retain an `ssh` label without guessed product/version fields. Other banners are retained even when the service is unknown.
 
+### FTP and SMTP identification
+
+Supported FTP banners identify vsFTPd and FileZilla Server, including a version when advertised in a supported format. SMTP identification requires a complete CRLF-terminated greeting starting with `220 ` or `220-` and containing a separate, uppercase `SMTP` or `ESMTP` token. A `220` code alone does not identify SMTP because FTP also uses it. Identification uses banner content, including on nonstandard ports.
+
+For SMTP, the parser searches the greeting for a separate `Postfix` or `Exim` token and reads the immediately following token as a possible version. A version must start with an ASCII digit and contain only ASCII letters, digits, dots, hyphens, or underscores. Missing or unsupported product/version text remains unknown; the service can still be identified as `smtp`.
+
+| Example banner | Service | Product | Version |
+| --- | --- | --- | --- |
+| `220 mail.example.test ESMTP Postfix` | smtp | Postfix | Unknown |
+| `220 mail.example.test ESMTP Exim 4.98` | smtp | Exim | 4.98 |
+| `220 mail.example.test ESMTP ready` | smtp | Unknown | Unknown |
+
+These are parser examples, not live scan results. SMTP identification is passive: rmap does not send `EHLO`, negotiate `STARTTLS`, or probe SMTP over implicit TLS. Slash-style product/version tokens and complete multiline greeting collection are not implemented. The banner reader stops after receiving a newline, so identification cannot rely on later greeting lines. Banners are self-reported observations, not verified software identities or vulnerability findings.
+
 Reporting creates a printable preview from at most 64 banner bytes, escapes control bytes, and removes a trailing line ending. Longer banners receive a truncation marker. When reading stops after receiving some data, the report includes both the preview and the stop reason, such as `partial banner (read timed out)`. Creating this preview does not shorten or modify the stored bytes.
 
 For open port 80, the scanner makes an HTTP `HEAD` request. A valid HTTP response gives the port an `http` label; the report shows the `Server` header when present. The HTTP probe does not follow redirects or use a configured proxy. It does not display HTTP status codes. A failed probe or banner read does not change a successful TCP connection into a closed result.
@@ -368,7 +382,7 @@ src/
 │   ├── mod.rs          Target validation and concurrent dispatch
 │   ├── worker.rs       Bounded async tasks and ordered result collection
 │   ├── tcp.rs          TCP connections, outcomes, and passive banners
-│   ├── identify.rs     Banner recognition and OpenSSH product/version parsing
+│   ├── identify.rs     SSH, HTTP, FTP, and SMTP banner identification
 │   ├── udp.rs          UDP probes and outcome classification
 │   └── http.rs         HTTP HEAD probe for open port 80
 ├── model/
