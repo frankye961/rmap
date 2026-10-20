@@ -36,6 +36,11 @@ pub fn parse_cli(args: &[String]) -> Result<CliConfig, String> {
                     return Err("Specify only one scan mode: --tcp or --udp".into());
                 }
             }
+            "--syn" => {
+                if mode.replace(ScanMode::Syn).is_some() {
+                    return Err("Specify only one scan mode: --tcp, --udp, or --syn".into());
+                }
+            }
             "--target" => {
                 let value = args.next().ok_or("Missing value for --target")?;
                 let address = parsing_target_list(value)?;

@@ -7,6 +7,9 @@ use crate::model::{MAX_CONCURRENCY, ScanMode, ScanResult};
 
 mod http;
 mod identify;
+// Learning exercises: unused until packet building is implemented and integrated.
+#[allow(dead_code)]
+mod syn;
 mod tcp;
 mod udp;
 mod worker;
