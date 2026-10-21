@@ -14,6 +14,7 @@ pub const MAX_CONCURRENCY: usize = 1024;
 pub enum ScanMode {
     Tcp,
     Udp,
+    Syn,
 }
 
 impl ScanMode {
@@ -21,6 +22,7 @@ impl ScanMode {
         match self {
             Self::Tcp => "tcp",
             Self::Udp => "udp",
+            Self::Syn => "syn",
         }
     }
 }

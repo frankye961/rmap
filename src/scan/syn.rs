@@ -1,10 +1,55 @@
-//! In-memory TCP SYN header exercises. No sockets, sending, or scanning here.
-//! Implement in the numbered order. Each placeholder returns an explicit error.
+//! In-memory TCP SYN header exercises and an unfinished scan entry point.
+//! No packet I/O is implemented. Complete the numbered header exercises first.
 //! Headers have no TCP options and no payload; IP packet construction comes later.
 
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
+use std::time::Duration;
 
-/// Exercise 1: 
+use crate::model::{PortStatus, ScanMode, ScanResult};
+
+/// Future asynchronous SYN probe for one destination port.
+///
+/// Implementation steps:
+/// 1. Determine the local source address, source port, and sequence number.
+/// 2. Prepare packet reception before sending the probe.
+/// 3. Build the SYN header using build_syn_header.
+/// 4. Send through a packet backend and wait within the timeout.
+/// 5. Match replies, classify the outcome, and perform required cleanup.
+/// 6. Return TCP measurements; reporting and AI remain outside this function.
+///
+/// Selects a local source IP without sending a probe; packet I/O remains unfinished.
+pub(super) async fn scan_port(target: SocketAddr, _timeout: Duration) -> ScanResult {
+    let _source_ip = match connect(target) {
+        Ok(ip) => ip,
+        Err(error) => {
+            return ScanResult {
+                port: target.port(),
+                transport: ScanMode::Tcp,
+                status: PortStatus::Unknown,
+                service: None,
+                elapsed: Duration::ZERO,
+                error: Some(format!("Failed to determine local source IP: {error}")),
+                observation: None,
+                banner: None,
+                service_information: None,
+            };
+        }
+    };
+
+    ScanResult {
+        port: target.port(),
+        transport: ScanMode::Tcp,
+        status: PortStatus::Unknown,
+        service: None,
+        elapsed: Duration::ZERO,
+        error: Some("SYN scanning is not implemented: packet I/O is missing".into()),
+        observation: None,
+        banner: None,
+        service_information: None,
+    }
+}
+
+/// Exercise 1:
 pub(super) fn port_to_bytes(_port: u16) -> Result<[u8; 2], String> {
     Ok(_port.to_be_bytes())
 }
@@ -71,7 +116,7 @@ pub(super) fn internet_checksum(_data: &[u8]) -> Result<u16, String> {
         sum = (sum & 0xFFFF) + (sum >> 16);
     }
 
-      // Fix: Wrap the casted sum in parentheses before applying the NOT (!) operator
+    // Fix: Wrap the casted sum in parentheses before applying the NOT (!) operator
     Ok(!(sum as u16))
 }
 
@@ -137,3 +182,13 @@ pub(super) fn build_syn_header(
 
     Ok(header)
 }
+
+fn connect(target: SocketAddr) -> std::io::Result<IpAddr> {
+    let socket = UdpSocket::bind("0.0.0.0:0")?;
+    socket.connect(target)?;
+    Ok(socket.local_addr()?.ip())
+}
+
+#[cfg(test)]
+#[path = "../../tests/scan/syn.rs"]
+mod tests;

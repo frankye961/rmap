@@ -43,6 +43,7 @@ pub fn scan(
             match mode {
                 ScanMode::Tcp => tcp::scan_port(target, timeout).await,
                 ScanMode::Udp => udp::scan_port(target, timeout).await,
+                ScanMode::Syn => syn::scan_port(target, timeout).await,
             }
         },
         on_result,

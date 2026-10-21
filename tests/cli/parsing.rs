@@ -1,6 +1,31 @@
 use super::{CliConfig, parse_cli};
 use crate::model::ScanMode;
 
+#[test]
+fn syn_mode_is_optional_and_tcp_connect_remains_the_default() {
+    assert_eq!(parse_cli(&arguments(&[])).unwrap().mode, ScanMode::Tcp);
+    assert_eq!(
+        parse_cli(&arguments(&["--syn"])).unwrap().mode,
+        ScanMode::Syn
+    );
+}
+
+#[test]
+fn rejects_syn_combined_with_other_modes_or_repeated() {
+    for flags in [
+        ["--syn", "--tcp"],
+        ["--tcp", "--syn"],
+        ["--syn", "--udp"],
+        ["--udp", "--syn"],
+        ["--syn", "--syn"],
+    ] {
+        assert!(
+            parse_cli(&arguments(&flags)).is_err(),
+            "accepted modes: {flags:?}"
+        );
+    }
+}
+
 fn arguments(mode: &[&str]) -> Vec<String> {
     [
         "--target",
