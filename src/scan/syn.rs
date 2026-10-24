@@ -3,9 +3,10 @@
 //! Headers have no TCP options and no payload; IP packet construction comes later.
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::model::{PortStatus, ScanMode, ScanResult};
+use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 
 /// Future asynchronous SYN probe for one destination port.
 ///
@@ -19,43 +20,99 @@ use crate::model::{PortStatus, ScanMode, ScanResult};
 ///
 /// Selects a local source IP without sending a probe; packet I/O remains unfinished.
 pub(super) async fn scan_port(target: SocketAddr, _timeout: Duration) -> ScanResult {
-    let _source_ip = match connect(target) {
+    let started = Instant::now();
+    let destination_ip = match target.ip() {
+        IpAddr::V4(ip) => ip,
+        IpAddr::V6(_) => {
+            return unknown_result(
+                target,
+                started.elapsed(),
+                "IPv6 is not supported for SYN scanning".into(),
+            );
+        }
+    };
+    let source_ip = match connect(target) {
         Ok(IpAddr::V4(ip)) => ip,
         Ok(IpAddr::V6(_)) => {
-            return ScanResult {
-                port: target.port(),
-                transport: ScanMode::Tcp,
-                status: PortStatus::Unknown,
-                service: None,
-                elapsed: Duration::ZERO,
-                error: Some("IPv6 is not supported for SYN scanning".into()),
-                observation: None,
-                banner: None,
-                service_information: None,
-            };
+            return unknown_result(
+                target,
+                started.elapsed(),
+                "IPv6 is not supported for SYN scanning".into(),
+            );
         }
         Err(error) => {
-            return ScanResult {
-                port: target.port(),
-                transport: ScanMode::Tcp,
-                status: PortStatus::Unknown,
-                service: None,
-                elapsed: Duration::ZERO,
-                error: Some(format!("Failed to determine local source IP: {error}")),
-                observation: None,
-                banner: None,
-                service_information: None,
-            };
+            return unknown_result(
+                target,
+                started.elapsed(),
+                format!("Failed to determine local source IP: {error}"),
+            );
         }
     };
 
+    // Retain the socket so the TCP source port stays reserved for this probe.
+    let (_source_socket, source_port) = match create_unconnected_tcp_socket(source_ip) {
+        Ok((socket, port)) => (socket, port),
+        Err(error) => {
+            return unknown_result(
+                target,
+                started.elapsed(),
+                format!("Failed to reserve TCP source port: {error}"),
+            );
+        }
+    };
+
+    let sequence_number = match generate_sequence_number() {
+        Ok(sequence) => sequence,
+        Err(error) => {
+            return unknown_result(
+                target,
+                started.elapsed(),
+                format!("Failed to generate SYN sequence number: {error}"),
+            );
+        }
+    };
+
+    // Advertise the same 1024-byte window used in the header exercises.
+    let window: u16 = 1024;
+    let syn_header = match build_syn_header(
+        source_ip,
+        destination_ip,
+        source_port,
+        target.port(),
+        sequence_number,
+        window,
+    ) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            return unknown_result(
+                target,
+                started.elapsed(),
+                format!("Failed to build SYN header: {error}"),
+            );
+        }
+    };
+
+    unknown_result(
+        target,
+        started.elapsed(),
+        "SYN scanning is not implemented: packet I/O is missing".into(),
+    )
+}
+
+/// Obtain a sequence number from the operating system's random source.
+fn generate_sequence_number() -> Result<u32, getrandom::Error> {
+    getrandom::u32()
+}
+
+/// Preserve a local setup failure without claiming a remote port state.
+fn unknown_result(target: SocketAddr, elapsed: Duration, error: String) -> ScanResult {
     ScanResult {
         port: target.port(),
         transport: ScanMode::Tcp,
         status: PortStatus::Unknown,
         service: None,
-        elapsed: Duration::ZERO,
-        error: Some("SYN scanning is not implemented: packet I/O is missing".into()),
+        elapsed,
+        error: Some(error),
         observation: None,
         banner: None,
         service_information: None,
@@ -197,6 +254,34 @@ fn connect(target: SocketAddr) -> std::io::Result<IpAddr> {
     let socket = UdpSocket::bind("0.0.0.0:0")?;
     socket.connect(target)?;
     Ok(socket.local_addr()?.ip())
+}
+
+fn create_unconnected_tcp_socket(
+    _source_ip: Ipv4Addr,
+) -> Result<(Socket, u16), Box<dyn std::error::Error>> {
+    let unconn_socket = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP))?;
+    let bind_addr: SocketAddr = format!("{}:0", _source_ip).parse()?;
+
+    unconn_socket.bind(&SockAddr::from(bind_addr))?;
+    let addr = unconn_socket
+        .local_addr()?
+        .as_socket()
+        .ok_or("Failed to convert socket address to standard SocketAddr")?;
+    let port = addr.port();
+    Ok((unconn_socket, port))
+}
+
+/// Prepare an IPv4 raw TCP socket bound to the source IP in nonblocking mode.
+/// Linux will supply outgoing IPv4 headers; received packets include an IP header.
+/// Tokio readiness integration comes later.
+fn prepare_raw_tcp_socket(_source_ip: Ipv4Addr) -> std::io::Result<Socket> {
+    let raw_socket = Socket::new(Domain::IPV4, Type::RAW, Some(Protocol::TCP))?;
+
+    let bind_addr = SocketAddr::from((_source_ip, 0));
+    let sock_addr = SockAddr::from(bind_addr);
+    raw_socket.bind(&sock_addr)?;
+    raw_socket.set_nonblocking(true)?; //sets the socket to non blocking
+    Ok(raw_socket)
 }
 
 #[cfg(test)]
