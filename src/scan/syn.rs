@@ -1,12 +1,13 @@
-//! In-memory TCP SYN header exercises and an unfinished scan entry point.
-//! No packet I/O is implemented. Complete the numbered header exercises first.
-//! Headers have no TCP options and no payload; IP packet construction comes later.
+//! TCP SYN header construction and sending with unfinished response handling.
+//! Headers have no TCP options or payload; Linux supplies outgoing IPv4 headers.
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use std::time::{Duration, Instant};
 
 use crate::model::{PortStatus, ScanMode, ScanResult};
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
+
+use tokio::io::unix::AsyncFd;
 
 /// Future asynchronous SYN probe for one destination port.
 ///
@@ -18,8 +19,8 @@ use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 /// 5. Match replies, classify the outcome, and perform required cleanup.
 /// 6. Return TCP measurements; reporting and AI remain outside this function.
 ///
-/// Selects a local source IP without sending a probe; packet I/O remains unfinished.
-pub(super) async fn scan_port(target: SocketAddr, _timeout: Duration) -> ScanResult {
+/// Sends one SYN probe; reception and port-state classification remain unfinished.
+pub(super) async fn scan_port(target: SocketAddr, timeout: Duration) -> ScanResult {
     let started = Instant::now();
     let destination_ip = match target.ip() {
         IpAddr::V4(ip) => ip,
@@ -92,10 +93,55 @@ pub(super) async fn scan_port(target: SocketAddr, _timeout: Duration) -> ScanRes
         }
     };
 
+    let raw_tcp = match prepare_raw_tcp_socket(source_ip) {
+        Ok(tcp) => tcp,
+        Err(error) => {
+            return unknown_result(
+                target,
+                started.elapsed(),
+                format!("Failed to prepare raw TCP socket: {error}"),
+            );
+        }
+    };
+
+    // SAFETY: raw_tcp owns a valid descriptor that remains open and unchanged
+    // while owned by AsyncFd; it is not manually closed or replaced.
+    let reg_tcp_raw = match unsafe { AsyncFd::register(raw_tcp) } {
+        Ok(socket) => socket,
+        Err(error) => {
+            return unknown_result(
+                target,
+                started.elapsed(),
+                format!("Failed to register raw TCP socket: {error}"),
+            );
+        }
+    };
+
+    // Sending and reception share one deadline.
+    let deadline = tokio::time::Instant::now() + timeout;
+    if let Err(error) = send_syn_probe(&reg_tcp_raw, &syn_header, destination_ip, deadline).await {
+        return unknown_result(
+            target,
+            started.elapsed(),
+            format!("Failed to send SYN probe: {error}"),
+        );
+    }
+
+    let _packet = match receive_raw_packet(&reg_tcp_raw, deadline).await {
+        Ok(packet) => packet,
+        Err(error) => {
+            return unknown_result(
+                target,
+                started.elapsed(),
+                format!("Failed to receive raw TCP packet: {error}"),
+            );
+        }
+    };
+
     unknown_result(
         target,
         started.elapsed(),
-        "SYN scanning is not implemented: packet I/O is missing".into(),
+        "Raw TCP packet received; reply validation and matching are not implemented".into(),
     )
 }
 
@@ -282,6 +328,116 @@ fn prepare_raw_tcp_socket(_source_ip: Ipv4Addr) -> std::io::Result<Socket> {
     raw_socket.bind(&sock_addr)?;
     raw_socket.set_nonblocking(true)?; //sets the socket to non blocking
     Ok(raw_socket)
+}
+
+/// Send one complete SYN header before the shared probe deadline.
+/// Build the destination SockAddr, await writable readiness, and use try_io.
+/// Retry WouldBlock, check the sent byte count, and propagate other errors.
+async fn send_syn_probe(
+    _socket: &AsyncFd<Socket>,
+    _header: &[u8; 20],
+    _destination_ip: Ipv4Addr,
+    _deadline: tokio::time::Instant,
+) -> std::io::Result<()> {
+    let destination_addr = SocketAddr::from((_destination_ip, 0));
+    let target_socket = SockAddr::from(destination_addr);
+
+    loop {
+        if tokio::time::Instant::now() >= _deadline {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "SYN send deadline expired",
+            ));
+        }
+        let mut wait = tokio::time::timeout_at(_deadline, _socket.writable())
+            .await
+            .map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "Timed out waiting to send SYN",
+                )
+            })??;
+        if tokio::time::Instant::now() >= _deadline {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "SYN send deadline expired",
+            ));
+        }
+        let outcome = wait.try_io(|registered_socket| {
+            registered_socket.get_ref().send_to(_header, &target_socket)
+        });
+
+        match outcome {
+            Ok(Ok(sent)) => {
+                if sent == _header.len() {
+                    return Ok(());
+                } else {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::WriteZero,
+                        "Incomplete SYN packet send",
+                    ));
+                }
+            }
+            Ok(Err(error)) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Ok(Err(error)) => return Err(error),
+            Err(_) => continue,
+        };
+    }
+}
+
+/// Receive one raw IPv4 packet before the same probe deadline.
+/// Await readable readiness and use try_io; retry WouldBlock without busy waiting.
+/// Return only received bytes, including the IP header; parsing happens separately.
+async fn receive_raw_packet(
+    _socket: &AsyncFd<Socket>,
+    _deadline: tokio::time::Instant,
+) -> std::io::Result<Vec<u8>> {
+    let mut buffer = [std::mem::MaybeUninit::<u8>::uninit(); 65_535];
+
+    loop {
+        if tokio::time::Instant::now() >= _deadline {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "SYN receive deadline expired",
+            ));
+        }
+
+        let mut ready = tokio::time::timeout_at(_deadline, _socket.readable())
+            .await
+            .map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "Timed out waiting for a SYN response",
+                )
+            })??;
+
+        if tokio::time::Instant::now() >= _deadline {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "SYN receive deadline expired",
+            ));
+        }
+
+        let outcome =
+            ready.try_io(|registered_socket| registered_socket.get_ref().recv(&mut buffer));
+
+        match outcome {
+            Ok(Ok(received)) => {
+                let bytes = buffer[..received]
+                    .iter()
+                    .map(|byte| {
+                        // SAFETY: recv initialized exactly the first `received` bytes.
+                        unsafe { byte.assume_init() }
+                    })
+                    .collect();
+
+                return Ok(bytes);
+            }
+            Ok(Err(error)) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Ok(Err(error)) => return Err(error),
+            Err(_) => continue,
+        }
+    }
 }
 
 #[cfg(test)]

@@ -20,6 +20,23 @@ fn checksum_input(header: &[u8; 20]) -> Vec<u8> {
     input
 }
 
+#[tokio::test]
+async fn expired_send_deadline_prevents_io_on_a_writable_socket() {
+    // A local Unix pair exercises readiness without creating a network probe.
+    let (socket, _peer) =
+        socket2::Socket::pair(socket2::Domain::UNIX, socket2::Type::STREAM, None).unwrap();
+    socket.set_nonblocking(true).unwrap();
+    // SAFETY: AsyncFd owns the socket; its descriptor stays valid and unchanged.
+    let socket = unsafe { tokio::io::unix::AsyncFd::register(socket) }.unwrap();
+    let deadline = tokio::time::Instant::now();
+
+    let error = super::send_syn_probe(&socket, &SYN_HEADER, DESTINATION, deadline)
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+}
+
 #[test]
 fn ports_are_encoded_in_network_byte_order() {
     for (port, expected) in [
