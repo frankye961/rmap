@@ -20,7 +20,20 @@ use crate::model::{PortStatus, ScanMode, ScanResult};
 /// Selects a local source IP without sending a probe; packet I/O remains unfinished.
 pub(super) async fn scan_port(target: SocketAddr, _timeout: Duration) -> ScanResult {
     let _source_ip = match connect(target) {
-        Ok(ip) => ip,
+        Ok(IpAddr::V4(ip)) => ip,
+        Ok(IpAddr::V6(_)) => {
+            return ScanResult {
+                port: target.port(),
+                transport: ScanMode::Tcp,
+                status: PortStatus::Unknown,
+                service: None,
+                elapsed: Duration::ZERO,
+                error: Some("IPv6 is not supported for SYN scanning".into()),
+                observation: None,
+                banner: None,
+                service_information: None,
+            };
+        }
         Err(error) => {
             return ScanResult {
                 port: target.port(),
@@ -104,7 +117,9 @@ pub(super) fn internet_checksum(_data: &[u8]) -> Result<u16, String> {
     for chunk in &mut chunks {
         // Convert the 2 big-endian bytes into a host u16, then cast to u32
         let word = u16::from_be_bytes([chunk[0], chunk[1]]) as u32;
-        sum = sum.wrapping_add(word);
+
+        sum += word;
+        sum = (sum & 0xFFFF) + (sum >> 16);
     }
 
     if let Some(&last_byte) = chunks.remainder().first() {
@@ -171,14 +186,9 @@ pub(super) fn build_syn_header(
     _window: u16,
 ) -> Result<[u8; 20], String> {
     let mut header = [0; 20];
-    header[0..2].copy_from_slice(&_source_port.to_be_bytes());
-    header[2..4].copy_from_slice(&_destination_port.to_be_bytes());
-    header[4..8].copy_from_slice(&_sequence_number.to_be_bytes());
-    header[8..12].copy_from_slice(&0u32.to_be_bytes()); // Acknowledgment number
-    header[12] = 0x50; // Data offset and reserved bits
-    header[13] = 0x02; // Flags (SYN)
-    header[14..16].copy_from_slice(&_window.to_be_bytes());
-    header[18..20].copy_from_slice(&0u16.to_be_bytes()); // Urgent pointer
+    write_ports(&mut header, _source_port, _destination_port)?;
+    write_syn_fields(&mut header, _sequence_number, _window)?;
+    apply_tcp_checksum(&mut header, _source, _destination)?;
 
     Ok(header)
 }
