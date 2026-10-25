@@ -91,7 +91,7 @@ Subnet selection does not imply that every selected address is online. An addres
 
 | Option | Meaning |
 | --- | --- |
-| `--tcp` | Run the TCP connect scanner; default when no mode flag is supplied |
+| `--tcp` | Select TCP; normal connect scanning unless `--syn` is also supplied (TCP is the default) |
 | `--udp` | Send an empty UDP probe to each selected port and wait for a response |
 | `--syn` | Run IPv4 TCP SYN discovery using Linux raw sockets; requires `CAP_NET_RAW`, no banner grabbing |
 | `--target TARGET[,TARGET...]` | IPv4 addresses and CIDR subnets; at most 4,096 unique targets, deduplicated in first-occurrence order; hostnames and IPv6 are not accepted |
@@ -102,11 +102,12 @@ Subnet selection does not imply that every selected address is online. An addres
 | `--ai` | Request DeepSeek interpretation after the scan report |
 | `--help`, `-h` | Show command syntax without scanning |
 
-Only `--target` is required. Without a transport flag, rmap uses TCP. Without `--ports`, it selects ports 1–65535. Without `--timeout-ms`, it uses 1000 ms. Transport flags cannot be combined or repeated. Explicit `--ports` and `--timeout-ms` flags still require valid, nonempty values; invalid input stops the run before any connection attempt.
+Only `--target` is required. Without a transport flag, rmap uses TCP. Without `--ports`, it selects ports 1–65535. Without `--timeout-ms`, it uses 1000 ms. `--tcp` and `--udp` cannot be combined or repeated. `--syn` can be supplied alone or with `--tcp` in either order; it cannot be repeated or combined with `--udp`. Explicit `--ports` and `--timeout-ms` flags still require valid, nonempty values; invalid input stops the run before any connection attempt.
 
 ### TCP SYN scanning
 
-`--syn` is optional and mutually exclusive with `--tcp` and `--udp`. It prepares
+`--syn` selects raw TCP SYN scanning. Both `--syn` and `--tcp --syn` work;
+`--udp --syn` is rejected. It prepares
 a nonblocking raw TCP socket before sending, then ignores malformed and unrelated
 packets until a matching response arrives or the shared send/receive deadline expires.
 SYN/ACK means open; RST/ACK means closed. Silence is tentatively filtered, with
@@ -125,9 +126,11 @@ scans, or identify application services in SYN mode. Linux may also generate its
 own resets. Offline tests exercise parsers and orchestration; privileged raw
 packet behavior and performance at high concurrency have not been live-validated.
 Start with a small explicit port list and low concurrency when validating it on
-an authorized test host. The existing full-scan report still hides non-open rows,
-including local failures; an empty open-port table alone does not prove every
-probe succeeded.
+an authorized test host. Raw-socket availability is checked before scheduling
+ports; a permission failure explains `CAP_NET_RAW` rather than producing an empty
+scan report. Full scans still show only open rows, but undetermined probes now
+have a visible count and example error, including resource exhaustion. An empty
+open-port table alone does not prove every probe succeeded.
 
 See [the SYN learning guide](docs/syn-learning-guide.md) for the implementation
 flow and remaining validation work.
@@ -180,6 +183,37 @@ Higher limits are not always faster: socket limits, packet loss, and target rate
 When `--ports` is omitted or its value contains a range, the table shows only ports measured as `open`, plus the number shown and total scanned. This includes UDP only when a response was received; silent `open|filtered` ports are hidden. If none are open, an explicit message says so. Hidden rows remain in the measured result collection and can still enter the bounded AI context. Explicit lists of individual ports continue to display every outcome, including closed, filtered, uncertain, and error results. A range in `--exclude-ports` alone does not change the display mode.
 
 Async reduces thread overhead; it does not shorten the configured timeout or bypass network and socket limits. The default concurrency remains 256 and the maximum remains 1024.
+
+On Linux, rmap checks the process's soft open-file limit and current descriptor
+usage after starting Tokio. It leaves 32 descriptors available for other work and
+budgets one per TCP/UDP probe or two per SYN probe. When necessary, it prints a
+notice and reduces the requested concurrency; every selected port stays queued.
+If there is no safe descriptor budget, scanning stops with an error. Where
+`/proc` information is unavailable, the configured limit is used unchanged.
+This is a local resource guard, not adaptive network pacing or a retry mechanism.
+
+For a timeout-heavy full scan, a rough duration estimate is
+`ports / effective concurrency × timeout`. With 65,535 ports and a one-second
+timeout, that is about 256 seconds at 256 concurrent probes or 67 seconds at 984,
+before extra processing and banner waits. Fast refusals can finish sooner.
+The TCP budget uses one socket because the initial connection is dropped before
+the separate HTTP request; SYN retains two sockets at once.
+
+If a full scan misses ports found by a smaller scan, inspect any `Undetermined
+probes` count and `Example failure` in the report. A very fast completion does not
+establish that every port returned a network response. Check your shell's soft
+descriptor limit with `ulimit -Sn`, and compare the same explicit ports with lower
+concurrency before raising the timeout:
+
+```bash
+rmap --tcp --target 192.0.2.21 --ports 21,22,80,111,139,445,2049,2121,8000 --concurrency 32 --timeout-ms 1000
+```
+
+Nmap's default port selection differs from rmap's full range. Compare the same
+ports, scan mode, and target conditions. Local resource errors, packet loss, and
+target rate limiting can affect observations; the descriptor guard cannot
+guarantee identical results. Service labels are also separate: rmap leaves an
+unidentified service as `-`, even when the port is confirmed open.
 
 ## Understanding scan results
 
@@ -470,6 +504,7 @@ src/
 ├── scan/
 │   ├── mod.rs          Target validation and concurrent dispatch
 │   ├── worker.rs       Bounded async tasks and ordered result collection
+│   ├── resources.rs    Descriptor budget and effective concurrency
 │   ├── syn/
 │   │   ├── mod.rs      Probe setup, ownership, and orchestration
 │   │   ├── packet.rs   IPv4/TCP bytes, parsing, and checksums

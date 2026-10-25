@@ -9,6 +9,18 @@ use std::time::{Duration, Instant};
 use super::packet::{internet_checksum, parse_ipv4_packet, parse_tcp_reply};
 use super::reply::{finish_syn_probe, interpret_syn_reply};
 use super::socket::receive_raw_packet;
+
+#[test]
+fn raw_socket_permission_errors_explain_privileges_and_preserve_other_errors() {
+    let denied =
+        super::socket::raw_socket_error(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+    assert!(denied.contains("CAP_NET_RAW"));
+    assert!(denied.contains("sudo"));
+    let other =
+        super::socket::raw_socket_error(std::io::Error::from(std::io::ErrorKind::AddrNotAvailable));
+    assert!(other.contains("Cannot prepare raw TCP socket"));
+    assert!(!other.contains("requires raw-socket privileges"));
+}
 use crate::model::PortStatus;
 use crate::model::syn::{ParsedIpv4Packet, SynProbe};
 use socket2::{Domain, Socket, Type};

@@ -133,6 +133,37 @@ fn open_only_without_open_ports_prints_an_explicit_message() {
     let mut output = Vec::new();
     super::write_results(&mut output, "192.0.2.21", &results[1..], true).unwrap();
     let output = String::from_utf8(output).unwrap();
-    assert!(output.contains("No open ports found among 4 scanned ports."));
+    assert!(output.contains("No open ports confirmed; 1 of 4 probes were undetermined."));
+    assert!(output.contains("Undetermined probes: 1."));
     assert!(!output.contains("2/udp"));
+}
+
+#[test]
+fn open_only_report_exposes_local_failures_without_printing_non_open_rows() {
+    let results = [80, 443].map(|port| {
+        crate::mapper::syn::map_syn_result(
+            std::net::SocketAddr::from(([192, 0, 2, 21], port)),
+            PortStatus::Unknown,
+            Duration::ZERO,
+            Some("Cannot prepare raw TCP socket: Too many open files".into()),
+            None,
+        )
+    });
+    let mut output = Vec::new();
+    super::write_results(&mut output, "192.0.2.21", &results, true).unwrap();
+    let output = String::from_utf8(output).unwrap();
+    assert!(output.contains("No open ports confirmed; 2 of 2 probes were undetermined."));
+    assert!(output.contains("Too many open files"));
+    assert!(!output.contains("80/tcp"));
+    assert!(!output.contains("443/tcp"));
+}
+
+#[test]
+fn open_only_report_without_local_failures_keeps_the_empty_scan_message() {
+    let mut output = Vec::new();
+    let results = measured_results();
+    super::write_results(&mut output, "192.0.2.21", &results[1..4], true).unwrap();
+    let output = String::from_utf8(output).unwrap();
+    assert!(output.contains("No open ports found among 3 scanned ports."));
+    assert!(!output.contains("Undetermined probes:"));
 }

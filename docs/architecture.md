@@ -88,6 +88,21 @@ CLI port selection and exclusions share `parsing_ports_function` in `src/cli/mod
 
 The common entry point validates all targets, creates one current-thread Tokio runtime, and runs asynchronous probes through a `JoinSet`. The scheduler fills available slots, waits for a completion, then schedules more work. It never creates a task for every port at once. The default limit is 256 active probes; `--concurrency` accepts 1–1024 and is capped by the selected port count. A limit of 1 runs sequentially. TCP and UDP each expose an asynchronous single-port probe, independent of scheduling and AI.
 
+`src/scan/resources.rs` also caps active probes using Linux's soft open-file limit
+from `/proc/self/limits` and current usage from `/proc/self/fd`. It runs after
+runtime creation to include reactor descriptors. It subtracts current usage and
+32 descriptors of headroom, then divides the remainder by two for SYN or one
+for TCP/UDP. SYN holds both a source-port reservation and a raw socket; TCP drops
+the initial stream before opening its separate HTTP connection. The smaller of this budget and the
+requested concurrency reaches the worker. A reduction is reported on stderr;
+no selected ports are removed. An exhausted budget is a scan-level error. If
+`/proc` cannot be inspected, the requested bound remains in effect.
+
+The budget is a starting snapshot, not a reservation of operating-system
+resources. Later local failures still produce undetermined outcomes and are
+summarized in open-only reports. This guard does not implement network pacing,
+adaptive timeouts, or retries, and cannot guarantee parity with another scanner.
+
 TCP connect and banner collection use Tokio sockets and deadlines. UDP uses a Tokio socket and bounded send/receive waits. The HTTP probe is awaited in the same runtime, without creating a nested runtime. Network waits yield to other tasks rather than occupying one OS thread per probe. Tokio was already a dependency; its networking, I/O and synchronization features are explicitly enabled.
 
 The collector invokes progress callbacks on the caller thread in task completion order, then assembles the final vector in requested order, including duplicate ports. Task IDs track each port so a task panic becomes an undetermined result without discarding other measurements. Dropping the task set cancels unfinished work.
@@ -116,6 +131,13 @@ The tool captures actual returned source links separately from the model's answe
 
 ## SYN response processing
 
+CLI parsing treats `--syn` as a TCP technique modifier: it works alone or with
+`--tcp`; combining it with `--udp` is invalid. The common entry point checks
+raw-socket availability before scheduling probes. This preflight creates and
+closes a local raw socket without sending packets. Local failures during later
+probes remain visible through an undetermined count and sample error even when
+individual non-open rows are hidden.
+
 `scan_port` retains the TCP source-port reservation, sequence number, and endpoints
 in a `SynProbe`, and registers a nonblocking raw TCP socket with Tokio before
 sending. `finish_syn_probe` receives packets under the original deadline and
@@ -143,5 +165,10 @@ exploit execution remain outside the current implementation. See [usage](usage.m
 ## Tests
 
 Unit tests for private helpers live in `tests/cli/`, `tests/scan/`, `tests/model/`, and `tests/ai/`. The source modules include those files during test builds. Tests use fixtures for request construction, response parsing, status classification, banner matching, prompt context, formatting, and concurrent scheduling. Worker tests use fake probes to verify overlap, concurrency limits, completion notifications, and ordered results. No live scan, search request, or AI request is needed for these checks.
+
+Resource tests distinguish soft from hard descriptor limits, cover exhausted
+budgets without unsigned underflow, and simulate a full 65,535-port schedule with
+a reduced budget. They verify that ports throughout the range are retained and
+that the worker respects the effective concurrency, without opening sockets.
 
 SSH identification parsing follows the line format documented in [RFC 4253, section 4.2](https://www.rfc-editor.org/rfc/rfc4253#section-4.2). The current parser requires a complete CRLF-terminated line and limits identification lines to 255 bytes. Protocol version (`2.0` or compatibility identifier `1.99`) is kept distinct from an OpenSSH software version such as `10.0p2`.

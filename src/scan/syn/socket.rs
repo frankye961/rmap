@@ -41,6 +41,16 @@ pub(super) fn prepare_raw_tcp_socket(_source_ip: Ipv4Addr) -> io::Result<Socket>
     Ok(socket)
 }
 
+/// Keep permission failures actionable without mislabeling the remote host.
+pub(super) fn raw_socket_error(_error: io::Error) -> String {
+    if _error.kind() == io::ErrorKind::PermissionDenied {
+        return format!(
+            "SYN scanning requires raw-socket privileges (CAP_NET_RAW). Run the built executable with sudo or configure that capability: {_error}"
+        );
+    }
+    format!("Cannot prepare raw TCP socket: {_error}")
+}
+
 pub(super) fn register_raw_socket(_socket: Socket) -> Result<AsyncFd<Socket>, String> {
     // SAFETY: AsyncFd owns the socket; its descriptor stays open and unchanged
     // until the wrapper is dropped. We never manually close or replace it.

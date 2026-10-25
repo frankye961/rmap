@@ -28,6 +28,7 @@ The earlier TCP scanner and banner grabbing are explained briefly for context.
 14. [What remains unfinished](#14-what-remains-unfinished)
 15. [Reading list](#15-reading-list)
 16. [Learning to parse packet bytes](#16-learning-to-parse-packet-bytes)
+17. [Why a fast full scan can miss open ports](#17-why-a-fast-full-scan-can-miss-open-ports)
 
 ## 1. Current state and overall flow
 
@@ -54,7 +55,7 @@ Passing tests and compilation do not establish that the full SYN scanner works
 on a real network. We have not validated this path with a live scan.
 
 ```text
-CLI selects --syn
+CLI selects --syn, optionally with --tcp
     |
 scan/mod.rs dispatches to syn::scan_port
     |
@@ -569,6 +570,19 @@ It calls `prepare_probe`, retains its resource owner, creates the deadline, send
 the SYN, and delegates replies to `finish_syn_probe`. Setup and send errors
 return `Unknown` with the actual message and elapsed time.
 
+### `check_available`
+
+The common scanner calls this before scheduling SYN ports. It creates and closes
+one local raw socket without sending packets. A permission error stops the scan
+with a CAP_NET_RAW explanation instead of processing thousands of failed probes.
+Later per-probe resource failures can still occur and must be reported.
+
+### `raw_socket_error`
+
+Formats raw socket setup errors. PermissionDenied explains CAP_NET_RAW and using
+the built executable with sudo. Other failures retain the actual OS diagnostic,
+so address/resource errors are not misreported as privilege problems.
+
 ### `prepare_probe`
 
 Validates IPv4, discovers the source IP, reserves a TCP source port, generates
@@ -1005,10 +1019,10 @@ Next validation and later work:
    raw-socket privileges. This has not been performed by the assistant.
 2. Observe SYN/SYN-ACK/RST behavior with packet capture, including any resets sent
    independently by the Linux kernel. Test a known open port, closed port, and silence.
-3. Evaluate file-descriptor limits, per-probe raw socket traffic duplication,
-   receive-buffer memory, and performance before increasing concurrency.
-4. Add visible local-failure summaries for open-only full scans. An empty table
-   currently does not prove all probes succeeded.
+3. Evaluate the descriptor-budget guard under load, per-probe raw socket traffic
+   duplication, receive-buffer memory, and performance before increasing concurrency.
+4. Evaluate failures under load. Open-only reports now show undetermined counts
+   and an example error; an empty table still does not prove all probes succeeded.
 5. Consider ICMP error interpretation and a bounded retransmission policy later;
    neither is included in this initial implementation. IPv6 SYN is also unsupported.
 6. Expand application probing (HTTP on other ports, TLS, SMB, RPC/NFS) separately.
@@ -1167,3 +1181,64 @@ Read these in order, using your code to connect the explanation to an example:
 For each field, ask: where is it, how wide is it, how is it encoded, and what
 must be checked before using it? Answering those four questions is the core
 skill behind these parsing exercises.
+
+## 17. Why a fast full scan can miss open ports
+
+A file descriptor is a process-local handle for an open resource, including a
+socket. Linux limits how many descriptor numbers a process may allocate through
+the `RLIMIT_NOFILE` soft limit. Running 1024 probes can therefore be too much for
+a process with a soft limit of 1024: standard streams, Tokio's reactor, and other
+open resources also need descriptors. SYN probes additionally hold two sockets.
+Exceeding this limit can produce `Too many open files` immediately, before any
+packet is sent. Rapid local failures can make a full scan look unusually fast.
+This is one possible cause of missing ports, not a diagnosis from elapsed time
+alone. Check the report's undetermined count and sample error.
+
+The guard lives in `src/scan/resources.rs`:
+
+1. `parse_open_file_limit` finds `Max open files` in `/proc/self/limits` and reads
+   its first value, the soft limit. The hard limit is the ceiling for increasing
+   the soft limit; it is not the budget currently enforced.
+2. `concurrency_limit` reads that limit and counts `/proc/self/fd` entries after
+   Tokio starts, so reactor descriptors are already included. If this information
+   is unavailable, it leaves the requested concurrency unchanged.
+3. `limit_from_budget` subtracts the open count and 32 descriptors of headroom.
+   `saturating_sub` returns zero rather than underflowing when the subtraction
+   would be negative. It divides the remainder by two for SYN or one for TCP/UDP,
+   then takes the smaller of that budget and the requested concurrency.
+4. `scan::scan` reports any reduction and gives the effective limit to the worker.
+   The worker still queues all ports. No available budget produces an error
+   before probes are scheduled.
+
+For example, a soft limit of 1024 with eight descriptors already open gives
+`1024 - 8 - 32 = 984` concurrent TCP/UDP probes at most, or `984 / 2 = 492`
+SYN probes. A request for 16 stays at 16. TCP drops the initial connection before
+its HTTP request, so it needs one socket per probe. SYN retains a source-port
+reservation and a raw socket at the same time.
+
+For many silent ports, estimate duration with
+`port count / effective concurrency × timeout`. With 65,535 ports and a one-second
+timeout, that is roughly 67 seconds at 984 concurrent probes, or 133 seconds at
+492. A lower concurrency avoids resource failures but increases the number of
+timeout batches. Immediate refusals shorten the run; banner waits and other
+overhead may lengthen it. These are estimates, not guaranteed completion times.
+
+The budget is a snapshot, not a reservation, retry policy, or network congestion
+controller. Local failures can still happen and must stay undetermined. Network
+timeouts can also miss an open service under packet loss or rate limiting.
+To investigate, compare the same explicit ports at lower concurrency and inspect
+the errors before increasing the timeout. Rebuild and reinstall the executable
+when testing source changes; `cargo build --release` does not update an installed
+`rmap` on PATH.
+
+`tests/scan/resources.rs` covers parsing, budget arithmetic, and an exhausted
+budget. Its full-range test runs fake probes for all 65,535 ports, checks the
+concurrency bound, and verifies that simulated open ports throughout the range
+are retained. It performs no real connections and does not establish live scan
+accuracy.
+
+Read [Linux getrlimit](https://man7.org/linux/man-pages/man2/getrlimit.2.html)
+for `RLIMIT_NOFILE` and `EMFILE`, and
+[/proc/pid/limits](https://man7.org/linux/man-pages/man5/proc_pid_limits.5.html)
+for the soft/hard limit format. In your terminal, `ulimit -Sn` displays the soft
+descriptor limit inherited by processes started from that shell.

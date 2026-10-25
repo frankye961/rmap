@@ -11,7 +11,7 @@ use crate::model::{DEFAULT_CONCURRENCY, MAX_CONCURRENCY, ScanMode};
 
 const MAX_TARGETS: usize = 4096;
 
-pub const USAGE: &str = "Usage: rmap --target TARGET[,TARGET...] [--tcp | --udp | --syn] [--ports LIST] [--exclude-ports LIST] [--timeout-ms MILLISECONDS] [--concurrency N] [--ai]\n--syn uses Linux raw TCP sockets and requires CAP_NET_RAW; it does not grab application banners.\nDefaults: TCP, all ports from 1 to 65535, timeout 1000 ms, concurrency 256 (1-1024).\nFull-range scans and --ports lists containing ranges show only open ports; individual-port lists show all outcomes.\nPort lists accept individual ports and inclusive ranges, e.g. 22,80-82,443.\nTargets accept IPv4 addresses and CIDR subnets; at most 4096 unique targets. Targets are scanned once each, in first-occurrence order.\n--exclude-ports requires an earlier --ports list and must leave at least one port.";
+pub const USAGE: &str = "Usage: rmap --target TARGET[,TARGET...] [--tcp | --udp] [--syn] [--ports LIST] [--exclude-ports LIST] [--timeout-ms MILLISECONDS] [--concurrency N] [--ai]\n--syn selects TCP SYN scanning, optionally with --tcp; it cannot be combined with --udp. Linux raw sockets require CAP_NET_RAW; no application banners are collected.\nDefaults: TCP, all ports from 1 to 65535, timeout 1000 ms, concurrency 256 (1-1024).\nFull-range scans and --ports lists containing ranges show only open ports; individual-port lists show all outcomes.\nPort lists accept individual ports and inclusive ranges, e.g. 22,80-82,443.\nTargets accept IPv4 addresses and CIDR subnets; at most 4096 unique targets. Targets are scanned once each, in first-occurrence order.\n--exclude-ports requires an earlier --ports list and must leave at least one port.";
 
 pub fn parse_cli(args: &[String]) -> Result<CliConfig, String> {
     let mut target = None;
@@ -22,6 +22,7 @@ pub fn parse_cli(args: &[String]) -> Result<CliConfig, String> {
     let mut use_ai = false;
     let mut concurrency = None;
     let mut mode = None;
+    let mut use_syn = false;
     let mut args = args.iter();
 
     while let Some(flag) = args.next() {
@@ -33,13 +34,14 @@ pub fn parse_cli(args: &[String]) -> Result<CliConfig, String> {
                     ScanMode::Udp
                 };
                 if mode.replace(selected).is_some() {
-                    return Err("Specify only one scan mode: --tcp, --udp, or --syn".into());
+                    return Err("Specify --tcp or --udp only once; they cannot be combined".into());
                 }
             }
             "--syn" => {
-                if mode.replace(ScanMode::Syn).is_some() {
-                    return Err("Specify only one scan mode: --tcp, --udp, or --syn".into());
+                if use_syn {
+                    return Err("--syn was given more than once".into());
                 }
+                use_syn = true;
             }
             "--target" => {
                 let value = args.next().ok_or("Missing value for --target")?;
@@ -117,12 +119,21 @@ pub fn parse_cli(args: &[String]) -> Result<CliConfig, String> {
         }
     }
 
+    let mode = if use_syn {
+        if mode == Some(ScanMode::Udp) {
+            return Err("--syn applies to TCP and cannot be combined with --udp".into());
+        }
+        ScanMode::Syn
+    } else {
+        mode.unwrap_or(ScanMode::Tcp)
+    };
+
     Ok(CliConfig {
         target: target.ok_or("Missing --target")?,
         open_only,
         ports: ports.unwrap_or_else(|| (1..=u16::MAX).map(|port| port.to_string()).collect()),
         timeout: timeout.unwrap_or(Duration::from_millis(1000)),
-        mode: mode.unwrap_or(ScanMode::Tcp),
+        mode,
         use_ai,
         concurrency: concurrency.unwrap_or(DEFAULT_CONCURRENCY),
     })

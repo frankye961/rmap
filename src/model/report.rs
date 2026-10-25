@@ -30,7 +30,17 @@ fn write_results(
         }
     }
     if open_only {
-        if displayed == 0 {
+        let undetermined = results
+            .iter()
+            .filter(|result| result.status == PortStatus::Unknown)
+            .count();
+        if displayed == 0 && undetermined > 0 {
+            writeln!(
+                output,
+                "No open ports confirmed; {undetermined} of {} probes were undetermined.",
+                results.len()
+            )?;
+        } else if displayed == 0 {
             writeln!(
                 output,
                 "No open ports found among {} scanned ports.",
@@ -42,6 +52,23 @@ fn write_results(
                 "\nOpen ports shown: {displayed}; ports scanned: {}.",
                 results.len()
             )?;
+        }
+        if undetermined > 0 {
+            writeln!(
+                output,
+                "Undetermined probes: {undetermined}. These are not confirmed closed or filtered ports."
+            )?;
+            if let Some(error) = results
+                .iter()
+                .filter(|result| result.status == PortStatus::Unknown)
+                .find_map(|result| result.error.as_deref())
+            {
+                writeln!(
+                    output,
+                    "Example failure: {}",
+                    escape_bytes(error.as_bytes(), 240)
+                )?;
+            }
         }
     } else {
         if results

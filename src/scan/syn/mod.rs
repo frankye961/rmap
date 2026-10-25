@@ -1,5 +1,6 @@
 //! IPv4 SYN discovery: prepare a probe, send it, then process matching replies.
 
+use std::net::Ipv4Addr;
 use std::net::{SocketAddr, SocketAddrV4};
 use std::time::{Duration, Instant};
 
@@ -13,6 +14,13 @@ use crate::model::{PortStatus, ScanResult};
 mod packet;
 mod reply;
 mod socket;
+
+/// Fail before scheduling ports if raw socket setup is unavailable. No packets sent.
+pub(super) fn check_available() -> Result<(), String> {
+    socket::prepare_raw_tcp_socket(Ipv4Addr::UNSPECIFIED)
+        .map(|_| ())
+        .map_err(socket::raw_socket_error)
+}
 
 /// Own the reservation and registered raw socket for the entire probe lifetime.
 struct PreparedProbe {
@@ -75,8 +83,7 @@ fn prepare_probe(target: SocketAddr) -> Result<PreparedProbe, String> {
         sequence_number,
         1024,
     )?;
-    let raw = socket::prepare_raw_tcp_socket(source_ip)
-        .map_err(|error| format!("Failed to prepare raw TCP socket: {error}"))?;
+    let raw = socket::prepare_raw_tcp_socket(source_ip).map_err(socket::raw_socket_error)?;
     let socket = socket::register_raw_socket(raw)?;
     Ok(PreparedProbe {
         _source_socket: source_socket,
