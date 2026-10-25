@@ -3,7 +3,7 @@
 pub mod progress;
 pub mod report;
 pub mod service_information;
-// Learning scaffolding: used when SYN response handling is implemented.
+// Parsed reply fields include values retained for future protocol diagnostics.
 #[allow(dead_code)]
 pub mod syn;
 
@@ -21,6 +21,14 @@ pub enum ScanMode {
 }
 
 impl ScanMode {
+    /// SYN is a scan technique over TCP, not a separate transport protocol.
+    pub fn transport(self) -> Self {
+        match self {
+            Self::Syn => Self::Tcp,
+            mode => mode,
+        }
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Tcp => "tcp",

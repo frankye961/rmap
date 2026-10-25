@@ -1,4 +1,4 @@
-//! Validate targets and dispatch bounded concurrent TCP or UDP probes.
+//! Validate targets and dispatch bounded concurrent TCP connect, SYN, or UDP probes.
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::time::Duration;
@@ -7,8 +7,6 @@ use crate::model::{MAX_CONCURRENCY, ScanMode, ScanResult};
 
 mod http;
 mod identify;
-// Learning exercises: unused until packet building is implemented and integrated.
-#[allow(dead_code)]
 mod syn;
 mod tcp;
 mod udp;

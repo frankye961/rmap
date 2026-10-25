@@ -1,6 +1,7 @@
+use crate::model::syn::{ParsedIpv4Packet, SynProbe, TcpReply};
 use std::net::Ipv4Addr;
 
-use super::{
+use super::packet::{
     apply_tcp_checksum, build_syn_header, empty_tcp_header, internet_checksum, ipv4_pseudo_header,
     port_to_bytes, write_ports, write_syn_fields,
 };
@@ -14,10 +15,129 @@ const SYN_HEADER: [u8; 20] = [
     0x9c, 0x40, 0, 0x50, 0, 0, 0, 1, 0, 0, 0, 0, 0x50, 2, 4, 0, 0x22, 0xff, 0, 0,
 ];
 
+fn reply_match_fixture() -> (SynProbe, ParsedIpv4Packet<'static>, TcpReply) {
+    (
+        SynProbe {
+            source: std::net::SocketAddrV4::new(SOURCE, 40000),
+            destination: std::net::SocketAddrV4::new(DESTINATION, 80),
+            sequence_number: 1,
+        },
+        ParsedIpv4Packet {
+            source: DESTINATION,
+            destination: SOURCE,
+            tcp_segment: &[], // Matching consumes fields already validated by the parsers.
+        },
+        TcpReply {
+            source_port: 80,
+            destination_port: 40000,
+            sequence_number: 0, // Zero is valid; this is the remote side's sequence.
+            acknowledgment_number: 2,
+            flags: 0x12,
+        },
+    )
+}
+
+#[test]
+fn reply_matching_accepts_syn_ack_or_rst_ack_and_rejects_contradictory_flags() {
+    let (probe, packet, mut reply) = reply_match_fixture();
+    for flags in [0x12, 0x14, 0x52] {
+        reply.flags = flags;
+        assert!(
+            super::reply::match_syn_reply(&probe, &packet, &reply).unwrap(),
+            "flags {flags:#04x}"
+        );
+    }
+    for flags in [0x00, 0x10, 0x02, 0x04, 0x16, 0x13, 0x15] {
+        reply.flags = flags;
+        assert!(
+            !super::reply::match_syn_reply(&probe, &packet, &reply).unwrap(),
+            "flags {flags:#04x}"
+        );
+    }
+}
+
+#[test]
+fn reply_matching_checks_acknowledgment_and_sequence_wraparound() {
+    let (mut probe, packet, mut reply) = reply_match_fixture();
+    reply.acknowledgment_number = 3;
+    assert!(!super::reply::match_syn_reply(&probe, &packet, &reply).unwrap());
+    probe.sequence_number = u32::MAX;
+    reply.acknowledgment_number = 0;
+    assert!(super::reply::match_syn_reply(&probe, &packet, &reply).unwrap());
+}
+
+#[test]
+fn reply_classification_labels_supported_responses_and_ignores_extra_ecn_bits() {
+    let (_, _, mut reply) = reply_match_fixture();
+    for (flags, expected) in [
+        (0x12, crate::model::PortStatus::Open),
+        (0x14, crate::model::PortStatus::Closed),
+        (0x52, crate::model::PortStatus::Open),
+        (0x54, crate::model::PortStatus::Closed),
+    ] {
+        reply.flags = flags;
+        assert_eq!(
+            super::reply::classify_syn_reply(&reply).unwrap(),
+            Some(expected)
+        );
+    }
+}
+
+#[test]
+fn reply_classification_leaves_unsupported_flags_unclassified() {
+    let (_, _, mut reply) = reply_match_fixture();
+    for flags in [0x00, 0x02, 0x04, 0x10, 0x16, 0x13, 0x15, 0xff] {
+        reply.flags = flags;
+        assert_eq!(
+            super::reply::classify_syn_reply(&reply).unwrap(),
+            None,
+            "flags {flags:#04x}"
+        );
+    }
+}
+
 fn checksum_input(header: &[u8; 20]) -> Vec<u8> {
     let mut input = PSEUDO_HEADER.to_vec();
     input.extend_from_slice(header);
     input
+}
+
+#[test]
+fn reset_header_uses_original_endpoints_reply_ack_and_rst_only() {
+    let (probe, _, reply) = reply_match_fixture();
+    let header = super::packet::build_rst_header(&probe, &reply).unwrap();
+    // Ports 40000 -> 80, sequence from reply ACK (2), zero ACK/window, RST only.
+    assert_eq!(
+        header,
+        [
+            0x9c, 0x40, 0, 0x50, 0, 0, 0, 2, 0, 0, 0, 0, 0x50, 4, 0, 0, 0x26, 0xfc, 0, 0,
+        ]
+    );
+    assert_eq!(internet_checksum(&checksum_input(&header)).unwrap(), 0);
+}
+
+#[tokio::test]
+async fn cleanup_skips_non_open_replies_and_obeys_send_deadline() {
+    // A local Unix pair avoids raw socket privileges and network traffic.
+    let (socket, _peer) =
+        socket2::Socket::pair(socket2::Domain::UNIX, socket2::Type::STREAM, None).unwrap();
+    socket.set_nonblocking(true).unwrap();
+    // SAFETY: AsyncFd owns the socket and its descriptor is not closed or replaced.
+    let socket = unsafe { tokio::io::unix::AsyncFd::register(socket) }.unwrap();
+    let (probe, _, mut reply) = reply_match_fixture();
+    let deadline = tokio::time::Instant::now();
+
+    for flags in [0x14, 0x10, 0x16, 0x13] {
+        reply.flags = flags;
+        super::cleanup_syn_probe(&socket, &probe, &reply, deadline)
+            .await
+            .unwrap();
+    }
+    reply.flags = 0x12;
+    let error = super::cleanup_syn_probe(&socket, &probe, &reply, deadline)
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
 }
 
 #[tokio::test]
@@ -30,7 +150,7 @@ async fn expired_send_deadline_prevents_io_on_a_writable_socket() {
     let socket = unsafe { tokio::io::unix::AsyncFd::register(socket) }.unwrap();
     let deadline = tokio::time::Instant::now();
 
-    let error = super::send_syn_probe(&socket, &SYN_HEADER, DESTINATION, deadline)
+    let error = super::socket::send_tcp_header(&socket, &SYN_HEADER, DESTINATION, deadline)
         .await
         .unwrap_err();
 

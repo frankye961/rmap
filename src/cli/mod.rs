@@ -11,7 +11,7 @@ use crate::model::{DEFAULT_CONCURRENCY, MAX_CONCURRENCY, ScanMode};
 
 const MAX_TARGETS: usize = 4096;
 
-pub const USAGE: &str = "Usage: rmap --target TARGET[,TARGET...] [--tcp | --udp] [--ports LIST] [--exclude-ports LIST] [--timeout-ms MILLISECONDS] [--concurrency N] [--ai]\nDefaults: TCP, all ports from 1 to 65535, timeout 1000 ms, concurrency 256 (1-1024).\nFull-range scans and --ports lists containing ranges show only open ports; individual-port lists show all outcomes.\nPort lists accept individual ports and inclusive ranges, e.g. 22,80-82,443.\nTargets accept IPv4 addresses and CIDR subnets; at most 4096 unique targets. Targets are scanned once each, in first-occurrence order.\n--exclude-ports requires an earlier --ports list and must leave at least one port.";
+pub const USAGE: &str = "Usage: rmap --target TARGET[,TARGET...] [--tcp | --udp | --syn] [--ports LIST] [--exclude-ports LIST] [--timeout-ms MILLISECONDS] [--concurrency N] [--ai]\n--syn uses Linux raw TCP sockets and requires CAP_NET_RAW; it does not grab application banners.\nDefaults: TCP, all ports from 1 to 65535, timeout 1000 ms, concurrency 256 (1-1024).\nFull-range scans and --ports lists containing ranges show only open ports; individual-port lists show all outcomes.\nPort lists accept individual ports and inclusive ranges, e.g. 22,80-82,443.\nTargets accept IPv4 addresses and CIDR subnets; at most 4096 unique targets. Targets are scanned once each, in first-occurrence order.\n--exclude-ports requires an earlier --ports list and must leave at least one port.";
 
 pub fn parse_cli(args: &[String]) -> Result<CliConfig, String> {
     let mut target = None;
@@ -33,7 +33,7 @@ pub fn parse_cli(args: &[String]) -> Result<CliConfig, String> {
                     ScanMode::Udp
                 };
                 if mode.replace(selected).is_some() {
-                    return Err("Specify only one scan mode: --tcp or --udp".into());
+                    return Err("Specify only one scan mode: --tcp, --udp, or --syn".into());
                 }
             }
             "--syn" => {

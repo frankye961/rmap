@@ -16,9 +16,23 @@ rmap --help
 
 Cargo's installation directory, usually `~/.cargo/bin`, must be on `PATH`. Reinstall after source changes when invoking the installed `rmap`; building the project alone does not update that executable.
 
-## Select TCP or UDP
+## Select TCP connect, TCP SYN, or UDP
 
-Only `--target` is required; it accepts a comma-separated list of numeric IPv4 addresses and CIDR subnets. Omit the transport flags to use TCP, or select `--udp` explicitly. The flags cannot be combined or repeated. Omit `--timeout-ms` to use 1000 milliseconds, or supply a positive integer to override it. Optionally select comma-separated ports and inclusive ranges from 1 through 65535 with `--ports`, for example `22,80-82,443`. Omitting `--ports` selects all 65535 ports in ascending order. An explicitly empty value or a `--ports` flag without a value is rejected. Hostnames and IPv6 are not accepted. TCP and UDP probes run concurrently, with up to 256 active async probes by default. The final report preserves the supplied port order, regardless of completion order.
+Only `--target` is required; it accepts a comma-separated list of numeric IPv4 addresses and CIDR subnets. Omit the mode flags to use TCP connect, or select `--udp` or `--syn` explicitly. The flags cannot be combined or repeated. Omit `--timeout-ms` to use 1000 milliseconds, or supply a positive integer to override it. Optionally select comma-separated ports and inclusive ranges from 1 through 65535 with `--ports`, for example `22,80-82,443`. Omitting `--ports` selects all 65535 ports in ascending order. An explicitly empty value or a `--ports` flag without a value is rejected. Hostnames and IPv6 are not accepted. Probes run concurrently, with up to 256 active tasks by default. The final report preserves the supplied port order, regardless of completion order.
+
+### SYN mode
+
+`--syn` uses Linux raw TCP sockets and needs `CAP_NET_RAW`. It does not run the
+TCP connect banner reader or HTTP probe. Validated matching SYN/ACK and RST/ACK
+responses become open and closed TCP results. No matching response before the
+shared send/receive deadline is tentatively filtered; local I/O failures are
+undetermined. Cleanup diagnostics do not erase an open result.
+
+Reset cleanup has at most 100 ms of the remaining probe deadline. Setup time is
+included in elapsed measurements but precedes the timeout budget. No ICMP error
+interpretation, unanswered-probe retries, or live performance validation is
+included. Use a small explicit port list and low concurrency for initial
+authorized validation. See [README SYN mode](../README.md#tcp-syn-scanning).
 
 ```bash
 rmap --target 192.0.2.10,192.0.2.11,192.0.2.10 --ports 22,80-82

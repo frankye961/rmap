@@ -1,6 +1,6 @@
 # Architecture
 
-rmap is a Rust network scanner inspired by Nmap, with optional AI research into observed services, possible CVEs, and public exploit references. It currently scans selected ports concurrently through bounded Tokio tasks for each unique IPv4 target using TCP connect attempts or empty UDP datagrams. Hosts are processed sequentially.
+rmap is a Rust network scanner inspired by Nmap, with optional AI research into observed services, possible CVEs, and public exploit references. It scans selected ports concurrently through bounded Tokio tasks for each unique IPv4 target using TCP connect, raw TCP SYN, or empty UDP probes. Hosts are processed sequentially.
 
 ## Flow through the application
 
@@ -11,10 +11,12 @@ flowchart TD
     Entry --> Pool[worker.rs: bounded async tasks]
     Pool --> TCP[tcp.rs: TCP connect and banner reads]
     Pool --> UDP[udp.rs: empty UDP probes]
+    Pool --> SYN[syn module: raw SYN and validated reply loop]
     TCP --> HTTP[http.rs: HEAD probe on open port 80]
     TCP --> Results[Structured ScanResult values]
     HTTP --> Results
     UDP --> Results
+    SYN --> Results
     Results --> Report[Measured console report]
     Results --> AI[Optional AI service with --ai]
     Local[Optional local advisory file] --> AI
@@ -37,7 +39,13 @@ flowchart TD
 | --- | --- |
 | `src/cli/mod.rs` | Validate input; default to TCP, ports 1–65535, 1000 ms, and 256 concurrent probes; reject conflicting transport flags |
 | `src/cli/config.rs` | Validated `CliConfig` settings, including concurrency and open-only reporting selection |
-| `src/scan/mod.rs` | Dispatch TCP or UDP through one entry point |
+| `src/scan/mod.rs` | Dispatch TCP connect, SYN, or UDP through one entry point |
+| `src/scan/syn/mod.rs` | Prepare and own probe resources; send and orchestrate response handling |
+| `src/scan/syn/packet.rs` | Pure byte construction, IPv4/TCP parsing, and checksums |
+| `src/scan/syn/reply.rs` | Match, classify, handle deadlines, and preserve results on cleanup failure |
+| `src/scan/syn/socket.rs` | Source selection, socket setup/registration, shared readiness waits, and packet I/O |
+| `src/model/syn.rs` | Parsed packet, reply, and original-probe values |
+| `src/mapper/syn.rs` | Map SYN measurements into TCP results |
 | `src/scan/worker.rs` | Schedule bounded async tasks on a shared Tokio runtime, report completions, and restore input order |
 | `src/scan/tcp.rs` | TCP connection attempts, status classification, bounded passive reads, and collected-banner identification |
 | `src/scan/identify.rs` | Parse supported SSH, HTTP, FTP and SMTP banners into service information |
@@ -57,7 +65,7 @@ Protocol parsers retain their format-specific rules. Shared byte operations live
 
 ## Shared types
 
-- `ScanMode` selects TCP or UDP and supplies the protocol label used in reports and AI context. Omitted transport flags default to TCP.
+- `ScanMode` selects TCP connect, SYN, or UDP. Its transport mapping labels SYN results as TCP. Omitted mode flags default to TCP connect.
 - `PortStatus` represents open, closed, tentative filtered, open or filtered, or undetermined outcomes.
 - `ServiceInformation` stores the identified protocol label, transport, optional product and version, and optional banner comments. Banner comments are separate from the read stop reason in `ScanResult.observation`.
 - `ScanResult` records the selected port and transport, outcome, elapsed time, optional service label, error, observation, and collected banner bytes. Passive banner bytes and the reason reading stopped are stored separately; reporting generates a bounded preview without changing the stored data.
@@ -106,7 +114,31 @@ AI is disabled unless explicitly requested. DeepSeek receives at most eight meas
 
 The tool captures actual returned source links separately from the model's answer. Snippets and banners are untrusted data. The prompt requires applicability checks and citations, but model conclusions remain interpretations. A source link does not prove the model has interpreted it correctly or that a target is vulnerable.
 
-Host discovery, raw-packet scan methods, full service fingerprinting, and exploit execution are outside the current implementation. See [usage](usage.md), [AI integration](ai-integration.md), and the [recorded README example](../README.md#example-tcp-scan-with-ai-research).
+## SYN response processing
+
+`scan_port` retains the TCP source-port reservation, sequence number, and endpoints
+in a `SynProbe`, and registers a nonblocking raw TCP socket with Tokio before
+sending. `finish_syn_probe` receives packets under the original deadline and
+passes each through IPv4 parsing, TCP checksum/length validation, endpoint and
+ACK matching, and flag classification. Invalid or unrelated packets are ignored;
+the loop yields to other tasks and never extends the deadline.
+
+The flow accepts ACK-bearing SYN/ACK as open and RST/ACK as closed. Silence is
+tentatively filtered; local setup, send, and receive failures remain unknown.
+Open results invoke reset cleanup with a cap of 100 ms within the remaining
+probe budget. A cleanup failure is recorded as an observation and does not
+discard the open state. Elapsed time is recorded before cleanup.
+
+`finish_syn_probe` accepts small receive/cleanup callbacks so offline tests can
+inject complete packets, silence, and failures without raw privileges. The real
+callbacks use the socket readiness helpers. Raw behavior has not been live-tested;
+ICMP error interpretation, IPv6 SYN, retransmissions, and application probes in
+SYN mode are outside this implementation. Per-probe raw sockets and memory use
+still need evaluation before high-concurrency production use.
+
+Host discovery, other raw-packet scan methods, full service fingerprinting, and
+exploit execution remain outside the current implementation. See [usage](usage.md),
+[AI integration](ai-integration.md), and the [SYN learning guide](syn-learning-guide.md).
 
 ## Tests
 

@@ -13,8 +13,8 @@ pub fn map_syn_result(
     _elapsed: Duration,
     _error: Option<String>,
     _observation: Option<String>,
-) -> Result<ScanResult, String> {
-    Ok(ScanResult {
+) -> ScanResult {
+    ScanResult {
         port: _target.port(),
         transport: ScanMode::Tcp,
         status: _status,
@@ -24,5 +24,5 @@ pub fn map_syn_result(
         observation: _observation,
         banner: None,
         service_information: None,
-    })
+    }
 }

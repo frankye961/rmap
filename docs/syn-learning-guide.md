@@ -1,7 +1,7 @@
 # Learning Rust and networking through rmap's SYN scanner
 
 This guide explains the concepts and functions used while building the SYN
-scanner in [src/scan/syn.rs](../src/scan/syn.rs). Read it alongside that file.
+scanner in [src/scan/syn/](../src/scan/syn/mod.rs). Read it alongside those modules.
 Examples describe the current implementation; they are not instructions to run
 a live scan.
 
@@ -22,7 +22,7 @@ The earlier TCP scanner and banner grabbing are explained briefly for context.
 8. [Tokio and readiness](#8-tokio-and-readiness)
 9. [Timeouts and deadlines](#9-timeouts-and-deadlines)
 10. [Receiving initialized bytes safely](#10-receiving-initialized-bytes-safely)
-11. [Every function in syn.rs](#11-every-function-in-synrs)
+11. [Every function in the SYN module](#11-every-function-in-the-syn-module)
 12. [Library functions and methods](#12-library-functions-and-methods)
 13. [Tests and development commands](#13-tests-and-development-commands)
 14. [What remains unfinished](#14-what-remains-unfinished)
@@ -31,13 +31,24 @@ The earlier TCP scanner and banner grabbing are explained briefly for context.
 
 ## 1. Current state and overall flow
 
-The code builds a TCP SYN header, prepares and registers a raw socket, sends the
-header, and waits for one raw packet. It does not yet validate or match that packet
-to the probe. It still returns an `Unknown` port state.
+Version 0.5.0 connects the basic IPv4 SYN pipeline end to end: build and send a
+SYN, receive packets, validate and match replies, classify them, attempt bounded
+reset cleanup, and report measurements. Invalid or unrelated packets are ignored
+under the original deadline. Silence is tentatively filtered; local failures
+are unknown. Cleanup failure preserves an open result.
 
-An IPv4 parser is now written but is not called from the receive path yet. TCP
-parsing currently checks only the minimum segment length. Matching, classification,
-and cleanup are still scaffolding. Result mapping is implemented separately.
+The former large `syn.rs` is split by responsibility:
+
+| File | Responsibility |
+| --- | --- |
+| [mod.rs](../src/scan/syn/mod.rs) | Prepare and own resources, send, and orchestrate cleanup. |
+| [packet.rs](../src/scan/syn/packet.rs) | Pure header construction, parsing, and checksums. |
+| [reply.rs](../src/scan/syn/reply.rs) | Match, classify, handle receive outcomes, preserve measurements. |
+| [socket.rs](../src/scan/syn/socket.rs) | Source selection, socket setup, shared readiness, and I/O. |
+
+Tests include parser fixtures, endpoint matching, invalid traffic, deadlines, and
+cleanup failure. They use synthetic packets and local Unix resources rather than
+raw network scans.
 
 Passing tests and compilation do not establish that the full SYN scanner works
 on a real network. We have not validated this path with a live scan.
@@ -63,9 +74,15 @@ Register socket with Tokio
     |
 Create one deadline
     |
-Send SYN -> receive one raw IPv4 packet
+Send SYN -> receive raw IPv4 packets until deadline
     |
-UNFINISHED: parse, validate, match, classify, and clean up
+Parse -> match -> classify
+    |       |
+    |       +-- invalid/unrelated -> receive again, same deadline
+    |
+Open -> bounded RST cleanup; closed -> no cleanup
+    |
+Map measured status and diagnostics -> console report
 ```
 
 The normal TCP connect scanner uses the operating system's TCP connection API.
@@ -232,9 +249,9 @@ gathers the transformed elements into a collection. The receive function's
 return type lets Rust infer `Vec<u8>` for its collected bytes.
 
 `Box<dyn std::error::Error>` holds an owned error of different possible concrete
-types behind a common interface. The port-allocation helper currently uses it
-because it also parses an address string. A helper containing only I/O failures
-can often use the simpler `std::io::Result` instead.
+types behind a common interface. An earlier port-allocation exercise used it
+while parsing an address string. The refactored helper constructs the address
+directly and returns the simpler `std::io::Result` instead.
 
 See the [Rust Book on Result](https://doc.rust-lang.org/book/ch09-02-recoverable-errors-with-result.html)
 and [closures](https://doc.rust-lang.org/book/ch13-01-closures.html) for fuller examples.
@@ -268,7 +285,7 @@ The current SYN path creates three socket resources for different reasons:
 
 ### Source-IP discovery
 
-`connect(target)` binds a UDP socket to `0.0.0.0:0`, associates it with the
+`discover_source_ip(target)` binds a UDP socket to `0.0.0.0:0`, associates it with the
 destination, and reads `local_addr().ip()`.
 
 Here UDP `connect` selects a peer and a route; it does not perform a TCP handshake
@@ -541,17 +558,57 @@ or load-tested for raw socket count and receive-buffer memory usage.
 Read [MaybeUninit](https://doc.rust-lang.org/std/mem/union.MaybeUninit.html)
 and [socket2 recv](https://docs.rs/socket2/0.5.10/socket2/struct.Socket.html#method.recv).
 
-## 11. Every function in syn.rs
+## 11. Every function in the SYN module
 
 The names are better navigation anchors than line numbers, which change after edits.
 
 ### `scan_port`
 
 Input: a destination `SocketAddr` and timeout. Output: a `ScanResult`.
-It orchestrates address discovery, allocation, sequence generation, header building,
-socket setup, registration, sending, and receiving. Every setup error returns an
-`Unknown` result with its actual message and elapsed time. Successful reception
-still returns `Unknown`, because `_packet` has not been interpreted.
+It calls `prepare_probe`, retains its resource owner, creates the deadline, sends
+the SYN, and delegates replies to `finish_syn_probe`. Setup and send errors
+return `Unknown` with the actual message and elapsed time.
+
+### `prepare_probe`
+
+Validates IPv4, discovers the source IP, reserves a TCP source port, generates
+the sequence, builds the SYN, and prepares/registers the raw socket. It returns
+a private `PreparedProbe` owning the reservation, probe data, header, and
+registered socket. The reservation remains alive across asynchronous operations.
+Setup sends no SYN packet.
+
+### `finish_syn_probe`
+
+Calls `wait_for_syn_reply`, maps receive errors, measures response elapsed time,
+and invokes cleanup only for open results. Cleanup warnings become observation
+text; they do not change the state. Result construction uses the shared mapper.
+
+Receive/cleanup callbacks keep the flow testable without raw privileges. Real
+callbacks call socket helpers; tests supply packet queues, pending futures, or
+I/O errors. `FnMut` lets a callback advance its queue; the returned future is
+awaited by the same orchestration. This is a small test seam, not a provider framework.
+
+### `wait_for_syn_reply`
+
+Receives under one deadline and calls `interpret_syn_reply`. Malformed or unrelated
+traffic causes another receive rather than deciding the port state. It yields
+between discarded packets so busy raw sockets do not monopolize the runtime.
+
+### `interpret_syn_reply`
+
+Calls the IPv4 parser, TCP parser, matcher, and classifier in order. A parser
+error denotes malformed/unsupported input; `Ok(None)` denotes no accepted matching
+reply; `Ok(Some((status, reply)))` supplies the measurement and reply for cleanup.
+
+### `receive_failure`
+
+Maps receive expiration to tentative `Filtered`, explicitly noting uncertainty.
+Other local receive failures become `Unknown`, preserving the actual error.
+
+### `cleanup_diagnostic`
+
+Caps cleanup at 100 ms of the remaining probe time. Errors become an optional
+warning string rather than overwriting measured status. Closed results skip it.
 
 ### `generate_sequence_number`
 
@@ -612,12 +669,12 @@ Creates the array, then calls `write_ports`, `write_syn_fields`, and
 `apply_tcp_checksum` in order. It returns ownership of the array. This function
 does not open sockets or send packets, so it is straightforward to unit-test.
 
-### `connect`
+### `discover_source_ip`
 
-Despite its general name, this is the UDP-based source-IP discovery helper.
-It binds a temporary UDP socket, associates the destination, and returns the local
-IP. Its socket is dropped on return. It does not create a TCP connection or perform
-the SYN scan itself.
+This is the UDP-based source-IP discovery helper, formerly named `connect`.
+It binds a temporary UDP socket, associates the IPv4 destination, and returns the
+local IPv4 address. Its socket is dropped on return. It does not create a TCP
+connection or send the SYN itself.
 
 ### `create_unconnected_tcp_socket`
 
@@ -630,9 +687,30 @@ socket lets the caller retain the reservation.
 
 Creates an IPv4 raw TCP socket, binds the source IP with port zero, enables
 nonblocking mode, and returns the owned socket. Setup failures propagate as
-I/O errors. It does not register with Tokio; `scan_port` does that afterward.
+I/O errors. It does not register with Tokio; `prepare_probe` does that afterward.
 
-### `send_syn_probe`
+### `register_raw_socket`
+
+Moves the socket into `AsyncFd`, documenting the unsafe descriptor-lifetime
+contract beside the call. It returns descriptive registration errors.
+
+### `wait_ready`
+
+Shares deadline checks and `timeout_at` handling for both sending and receiving.
+It checks time before and after awaiting `socket.ready(interest)`. The sender
+requests writable interest; the receiver requests readable interest.
+
+### `check_deadline`
+
+Returns a timeout error when the supplied instant has been reached. Readiness
+waiting and reply orchestration reuse this check.
+
+### `timeout_error`
+
+Constructs the common I/O `TimedOut` error. It describes the local deadline
+without claiming a remote filtering condition is proven.
+
+### `send_tcp_header`
 
 Borrows the registered raw socket and header. It constructs the raw destination,
 checks the deadline, awaits writable readiness under that deadline, checks time
@@ -654,52 +732,169 @@ Checks minimum size, IPv4 version, header length, total length, TCP protocol,
 header checksum, and fragmentation. It then extracts source and destination
 addresses and returns a TCP segment slice limited to the declared total length.
 It does not validate the TCP segment or establish that the packet answers our
-probe. IPv4 parser-specific tests have not been added yet.
+probe. Tests cover malformed lengths, checksum failures, fragments, options,
+and exclusion of trailing bytes beyond declared packet length.
 
 ### `parse_tcp_reply`
 
-Currently rejects TCP segments shorter than 20 bytes, then returns the explicit
-not-implemented error. The next exercise is reading the data offset from the
-upper four bits of TCP byte 12 and validating the resulting header length.
-Checksum verification and field extraction remain to be implemented.
+Checks minimum segment size and the header length encoded in byte 12's upper
+four bits. It builds a pseudo-header using the received addresses and complete
+TCP segment length, then verifies the checksum without modifying the received
+checksum field. It extracts ports as `u16`, sequence and acknowledgment as `u32`,
+and flags directly from byte 13, returning a `TcpReply`. Options and payload are
+included in checksum input even though they are not returned as parsed fields.
 
 ### `match_syn_reply`
 
-Scaffolding for comparing parsed addresses, reversed ports, acknowledgment, and
-flags with the retained `SynProbe`. It currently returns an error rather than
-pretending a packet matches or does not match.
+Checks that received source/destination addresses and ports are reversed relative
+to the original probe. A reply to local port 40000 targeting remote port 80 must
+come from remote port 80 back to local port 40000.
+
+It requires ACK and compares the received acknowledgment with the probe's
+sequence number plus one, calculated using `wrapping_add(1)`. SYN consumes one
+sequence number. The remote sequence number is independent and may legitimately
+be zero; it is not the value to compare against our expected acknowledgment.
+
+Finally it rejects FIN, SYN+RST together, and replies with neither SYN nor RST.
+It returns `Ok(true)` for an accepted response and `Ok(false)` for a mismatch.
+A nonmatching packet is not a local program failure. Matching correlates a reply
+with the probe; it does not authenticate the sender or prove service identity.
+The current policy does not accept RST replies lacking ACK.
 
 ### `classify_syn_reply`
 
-Scaffolding for mapping a validated, matching reply to a measured port state.
-The planned `Option` permits an unsupported flag combination to yield no
-classification. It currently returns a not-implemented error.
+Maps an already parsed, validated, matching reply to a measured port state. The
+caller must run the parsers and matcher first: this function reads flags only;
+it does not check addresses, acknowledgment numbers, or checksums.
+
+The implementation extracts these booleans using integer masks:
+
+| Boolean | Mask | Meaning when the masked value is nonzero |
+| --- | --- | --- |
+| `_fin` | `0x01` | FIN is set. |
+| `_syn` | `0x02` | SYN is set. |
+| `_rst` | `0x04` | RST is set. |
+| `_ack` | `0x10` | ACK is set. |
+
+It then rejects unsupported combinations with this condition:
+
+```rust
+if !_ack || _fin || _syn == _rst {
+    return Ok(None);
+}
+```
+
+`!_ack` means ACK is absent. `_fin` means FIN is present. `_syn == _rst`
+is true when both booleans are true or both are false: we require exactly one
+of SYN and RST. If this guard passes, SYN means open; otherwise RST must be set
+and means closed under the matching policy.
+
+| Relevant flags | Returned value |
+| --- | --- |
+| SYN + ACK, no RST or FIN | `Ok(Some(PortStatus::Open))` |
+| RST + ACK, no SYN or FIN | `Ok(Some(PortStatus::Closed))` |
+| Missing ACK, FIN, both SYN/RST, or neither SYN/RST | `Ok(None)` |
+
+Masking individual bits permits additional flags such as ECE to be present.
+Comparing the entire flags byte with a single constant would be more restrictive.
+This is the project's current supported-response policy, not a full TCP stack.
+
+The nested return type is `Result<Option<PortStatus>, String>`:
+
+- `Ok(Some(status))`: classification succeeded and produced a state.
+- `Ok(None)`: no supported classification; this does not mean closed.
+- `Err(message)`: the interface permits a classification error, though the
+  current implementation has no error branch.
+
+Timeouts have no received flags and are handled by scan orchestration, not this
+function. Cleanup failure must not erase a measured open state. The relevant
+TCP fields are documented in [RFC 9293, section 3.1](https://www.rfc-editor.org/rfc/rfc9293.html#section-3.1).
 
 ### `build_rst_header`
 
-Scaffolding for constructing a reset using the original probe and matching reply.
-It needs different sequence/flag handling from the SYN builder and is unfinished.
+Builds a 20-byte reset for an already validated, matching SYN/ACK:
+
+1. Start with a zero-filled TCP header.
+2. Write the original probe's source and destination ports. The reset travels
+   from our computer back to the target, just like the original SYN.
+3. Copy the received acknowledgment into the reset's sequence field, bytes 4–7.
+4. Set byte 12 to `0x50` (20-byte header) and byte 13 to `0x04` (RST only).
+5. Keep acknowledgment, window, and urgent pointer zero.
+6. Calculate the checksum last using the original source/destination addresses.
+7. Return the completed array.
+
+For example, if our SYN used sequence 1000 and the SYN/ACK acknowledged 1001,
+the reset's sequence is 1001. Do not add another one or copy the remote sequence.
+The reset's ACK flag is absent, so its acknowledgment field remains zero.
+This follows the ACK-bearing segment case in
+[RFC 9293, reset generation](https://www.rfc-editor.org/rfc/rfc9293.html#section-3.5.2).
+
+Single-byte fields use assignment, such as `header[13] = 0x04`. Multi-byte fields
+use `to_be_bytes` and `copy_from_slice`. The checksum helper mutates the array;
+its call ends with `?;`, while the final `Ok(header)` has no semicolon.
+The builder assumes its reply has already been validated and matched.
 
 ### `cleanup_syn_probe`
 
-Scaffolding for bounded asynchronous reset cleanup. A cleanup failure must not
-erase an already measured open state. It currently performs no operations.
+Builds and sends a reset for an already validated, matching open-port reply.
+It borrows the registered socket, original probe, reply, and cleanup deadline.
+The function returns `std::io::Result<()>`; it does not return or overwrite a
+`ScanResult`.
+
+The implementation proceeds in three stages:
+
+1. **Guard the operation.** Call `classify_syn_reply`. If the flag combination is
+   not classified as open, return `Ok(())` without building or sending a reset.
+   This avoids responding to RST/ACK or unsupported combinations. This guard
+   only checks flags: the caller must still perform packet validation and probe
+   matching first.
+2. **Build the bytes.** Call `build_rst_header` and retain its array. Convert a
+   builder error from `String` into an I/O `InvalidData` error with `map_err`;
+   `?` then returns that error early. Conversion is required because the two
+   helpers have different error types.
+3. **Send within the deadline.** Borrow the reset array and pass it to
+   `send_tcp_header` with the same registered socket, the probe's destination IP,
+   and the supplied deadline. Await and return its result.
+
+`send_tcp_header` sends any supplied 20-byte TCP header unchanged. It does not write SYN flags itself. Reusing it preserves
+the reset's `0x04` flags and avoids duplicating readiness, timeout, byte-count,
+Interrupted, and WouldBlock handling. The name now describes both SYN and reset transmission.
+
+The final awaited send expression has no semicolon because its I/O result is the
+cleanup function's return value. The socket and array are borrowed; the helper
+does not take ownership of the caller's registered socket.
+
+An already expired deadline means no send attempt for an open reply. A non-open
+reply is a successful no-op even if that deadline has expired, because there is
+no cleanup operation to perform. The helper does not wait for acknowledgment of
+the reset and does not add a network retransmission policy.
+
+**The caller must preserve the measured port state.** If SYN/ACK already established
+an open result and cleanup fails, retain `Open` and attach a separate diagnostic
+observation. Do not replace the measurement with `Unknown` or a timeout label.
+If the probe deadline has already expired, cleanup may have no remaining time;
+the caller caps cleanup at 100 ms of the remaining probe budget.
+
+Linux's normal TCP stack may generate a reset independently of our raw socket.
+This helper neither disables nor detects that behavior. Packet-level cleanup
+has not been validated in a live scan. The helper is now called through the
+reply orchestration callback.
 
 ### Supporting models and `map_syn_result`
 
 [src/model/syn.rs](../src/model/syn.rs) defines three small data containers:
 
 - `ParsedIpv4Packet<'a>` owns its IP address values but borrows the TCP bytes.
-- `TcpReply` will contain fields extracted from a validated TCP segment.
+- `TcpReply` contains fields extracted from a validated TCP segment.
 - `SynProbe` retains the original endpoints and sequence number for matching.
 
 The lifetime `'a` connects the borrowed TCP slice to the input packet's lifetime.
 It prevents retaining that view after the owning receive vector has been dropped.
 
-[map_syn_result](../src/mapper/syn.rs) is implemented but not yet wired in. It
-copies measured status and diagnostic fields into a TCP `ScanResult`, leaving
-application service and banner fields empty. Its current `Result` signature is
-retained from scaffolding even though construction has no failure branch.
+[map_syn_result](../src/mapper/syn.rs) constructs the final TCP `ScanResult`
+from measured status and diagnostic fields. Application service and banner fields
+remain empty. Its return type is now directly `ScanResult`: constructing this
+record has no failure path, so an extra `Result` wrapper is unnecessary.
 
 ## 12. Library functions and methods
 
@@ -710,7 +905,7 @@ retained from scaffolding even though construction has no failure branch.
 | `Ipv4Addr::octets` | Obtain an IPv4 address's four bytes. |
 | `to_be_bytes`, `from_be_bytes` | Encode and decode network-order integers. |
 | `copy_from_slice` | Copy equal-length byte slices into header fields. |
-| `chunks_exact(2)`, `remainder` | Process checksum words and a possible odd byte. |
+| `as_chunks::<2>()` | Process checksum words and a possible odd byte. |
 | `Vec::with_capacity` | Reserve storage without adding elements. |
 | `extend_from_slice` | Append actual bytes; unlike capacity reservation, changes length. |
 | `wrapping_add` | Add modulo the integer width; use only where wraparound is intended or bounded. |
@@ -732,10 +927,11 @@ retained from scaffolding even though construction has no failure branch.
 
 ## 13. Tests and development commands
 
-Tests are in [tests/scan/syn.rs](../tests/scan/syn.rs). `#[cfg(test)]` and
-`#[path = "../../tests/scan/syn.rs"]` attach them as a unit-test submodule of
-`syn.rs`; this is why they can access private parent helpers through `super`.
-They are not standalone Cargo integration tests.
+Tests are in [tests/scan/syn.rs](../tests/scan/syn.rs) and
+[tests/scan/syn_flow.rs](../tests/scan/syn_flow.rs). `#[cfg(test)]` and relative
+`#[path = "../../../tests/scan/..."]` declarations attach them to the SYN module
+root. This is why they access sibling helpers through `super::packet`,
+`super::reply`, or `super::socket`. They are not standalone Cargo integration tests.
 
 `#[test]` marks a synchronous test. `#[tokio::test]` supplies a runtime for an
 async test. `assert_eq!` checks equality; `assert_ne!` checks inequality.
@@ -749,6 +945,22 @@ Current coverage includes:
 - Pseudo-header layout, checksum replacement, and a complete expected SYN fixture.
 - Detection of changed checksum inputs.
 - An expired-send deadline using a local Unix socket pair, without a network probe.
+- Matching accepted SYN/ACK and RST/ACK responses and rejecting contradictory flags.
+- Rejecting an incorrect acknowledgment and accepting expected sequence wraparound.
+- Classifying supported replies, allowing additional ECE flags, and returning no
+  classification for unsupported flag combinations.
+- A complete reset-header fixture checking original endpoints, the reply's ACK
+  as reset sequence, RST-only flags, zero fields, and checksum.
+- Cleanup guard behavior: non-open replies require no send; open replies honor
+  an expired deadline. The test uses a local Unix socket pair and sends no data.
+- Parser coverage for truncated IPv4/TCP input, header and total lengths, checksum
+  errors, fragmentation, IP/TCP options, odd payloads, and trailing input bytes.
+- Flow coverage for malformed/unrelated traffic followed by a matching reply,
+  closed results without cleanup, local receive errors, silence, expired deadlines,
+  continuous invalid traffic, and cleanup failure/timeout preserving open results.
+- A local idle Unix socket pair verifies receive-deadline behavior without traffic.
+- Progress and reporting retain TCP transport and cleanup diagnostics.
+
 
 `checksum_input` in the test file joins the fixed pseudo-header and a supplied
 header for assertions. The fixed addresses are documentation addresses, not
@@ -782,30 +994,28 @@ it in Cargo's binary directory, which must be on PATH. A previously installed
 
 ## 14. What remains unfinished
 
-The IPv4 parser is written and awaiting dedicated tests. The next work is
-finishing TCP parsing and integrating parsing with `_packet` reception.
+The basic IPv4 SYN pipeline is wired for version 0.5.0, and its offline tests
+cover parsing, matching, classification, invalid/unrelated packets, deadline
+expiration, local receive errors, and cleanup failures that preserve open results.
+This is implementation-level completion, not live raw-packet validation.
 
-1. Add IPv4 parser tests, including malformed lengths and checksum failures.
-2. Finish TCP header-length validation, checksum verification, and field extraction.
-3. Match source/destination addresses, reversed ports, and appropriate
-   acknowledgment/flags against the retained probe values.
-4. Wire parsing and matching; ignore unrelated packets under the same deadline.
-5. Classify valid replies and timeouts, preserving uncertainty and local errors.
-6. Implement appropriate RST cleanup, accounting for kernel TCP behavior.
-7. Use the result mapper to replace the unconditional Unknown result.
-8. Add TCP-parser, matcher, receive/deadline, and error-path tests.
-9. Update CLI help and review transport labels so SYN measurements report TCP.
+Next validation and later work:
 
-The raw socket currently returns the first received TCP packet, which may be
-unrelated. No successful classification should be inferred from that alone.
-Raw sockets are also created per probe; their resources and traffic delivery
-behavior require review before relying on this architecture at high concurrency.
+1. Validate a small explicit port list on an authorized test host with appropriate
+   raw-socket privileges. This has not been performed by the assistant.
+2. Observe SYN/SYN-ACK/RST behavior with packet capture, including any resets sent
+   independently by the Linux kernel. Test a known open port, closed port, and silence.
+3. Evaluate file-descriptor limits, per-probe raw socket traffic duplication,
+   receive-buffer memory, and performance before increasing concurrency.
+4. Add visible local-failure summaries for open-only full scans. An empty table
+   currently does not prove all probes succeeded.
+5. Consider ICMP error interpretation and a bounded retransmission policy later;
+   neither is included in this initial implementation. IPv6 SYN is also unsupported.
+6. Expand application probing (HTTP on other ports, TLS, SMB, RPC/NFS) separately.
+   SYN packets alone do not provide application banners or software versions.
 
-Later service detection will establish separate application connections as
-needed. RPC, SMB, HTTP, and TLS have their own request/response behavior. Port-based
-service hints are guesses; banner or protocol evidence is a different information
-source. AI interpretation must remain separate from both measured states and
-unconfirmed hypotheses.
+Measured results remain independent of optional AI interpretation. Service hints,
+banners, and model hypotheses must not become unverified port-state facts.
 
 ## 15. Reading list
 

@@ -50,7 +50,7 @@ fn write_results(
         {
             writeln!(
                 output,
-                "\nfiltered = connection timed out; filtering is unconfirmed."
+                "\nfiltered = TCP probe timed out; filtering is unconfirmed."
             )?;
         }
         if results

@@ -4,6 +4,23 @@ use super::format_result;
 use crate::model::{PortStatus, ScanMode, ScanResult};
 
 #[test]
+fn syn_cleanup_diagnostic_is_visible_without_erasing_the_open_state() {
+    let result = crate::mapper::syn::map_syn_result(
+        "192.0.2.21:80".parse().unwrap(),
+        PortStatus::Open,
+        Duration::from_millis(20),
+        None,
+        Some("Matching TCP SYN/ACK received; RST cleanup failed: timed out".into()),
+    );
+    let line = format_result(&result);
+    assert!(line.starts_with("80/tcp"));
+    assert!(line.contains("open"));
+    assert!(line.contains("RST cleanup failed"));
+    assert!(result.banner.is_none());
+    assert!(result.service_information.is_none());
+}
+
+#[test]
 fn reports_transport_uncertainty_and_elapsed_time() {
     let mut result = ScanResult {
         port: 53,
