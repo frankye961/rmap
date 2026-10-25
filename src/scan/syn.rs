@@ -469,7 +469,7 @@ fn parse_ipv4_packet(_bytes: &[u8]) -> Result<ParsedIpv4Packet<'_>, String> {
         return Err("IPv4 packet does not contain TCP".into());
     }
 
-    if (internet_checksum(&_bytes[.._header_len])? != 0) {
+    if internet_checksum(&_bytes[.._header_len])? != 0 {
         return Err("Invalid IPv4 header checksum".into());
     }
 
@@ -492,7 +492,57 @@ fn parse_ipv4_packet(_bytes: &[u8]) -> Result<ParsedIpv4Packet<'_>, String> {
 /// Validate TCP length, data offset, and pseudo-header checksum, then extract fields.
 /// Length and checksum calculations must include any payload and TCP options.
 fn parse_tcp_reply(_packet: &ParsedIpv4Packet<'_>) -> Result<TcpReply, String> {
-    Err("TCP reply parsing is not implemented".into())
+    if _packet.tcp_segment.len() < 20 {
+        return Err("TCP segment too small".into());
+    }
+
+    let _header_len = usize::from(_packet.tcp_segment[12] >> 4) * 4;
+
+    if _header_len < 20 || _header_len > _packet.tcp_segment.len() {
+        return Err("Invalid Header length".into());
+    }
+
+    let _segment_length = u16::try_from(_packet.tcp_segment.len())
+        .map_err(|_| "TCP segment is too large".to_string())?;
+
+    let _pseudo_header = ipv4_pseudo_header(_packet.source, _packet.destination, _segment_length)?;
+
+    let mut _checksum_vec = Vec::with_capacity(_pseudo_header.len() + _packet.tcp_segment.len());
+
+    _checksum_vec.extend_from_slice(&_pseudo_header);
+    _checksum_vec.extend_from_slice(_packet.tcp_segment);
+
+    if internet_checksum(&_checksum_vec)? != 0 {
+        return Err("Invalid TCP checksum".into());
+    }
+
+    let _source_port = u16::from_be_bytes([_packet.tcp_segment[0], _packet.tcp_segment[1]]);
+
+    let _dest_port = u16::from_be_bytes([_packet.tcp_segment[2], _packet.tcp_segment[3]]);
+
+    let _seq_number = u32::from_be_bytes([
+        _packet.tcp_segment[4],
+        _packet.tcp_segment[5],
+        _packet.tcp_segment[6],
+        _packet.tcp_segment[7],
+    ]);
+
+    let _ack = u32::from_be_bytes([
+        _packet.tcp_segment[8],
+        _packet.tcp_segment[9],
+        _packet.tcp_segment[10],
+        _packet.tcp_segment[11],
+    ]);
+
+    let _flags = _packet.tcp_segment[13];
+
+    Ok(TcpReply {
+        source_port: _source_port,
+        destination_port: _dest_port,
+        sequence_number: _seq_number,
+        acknowledgment_number: _ack,
+        flags: _flags,
+    })
 }
 
 /// Compare reversed addresses and ports, acknowledgment, and acceptable flags

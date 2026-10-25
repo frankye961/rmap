@@ -6,7 +6,8 @@ Examples describe the current implementation; they are not instructions to run
 a live scan.
 
 The focus is the SYN work we have completed together: Rust syntax, ownership,
-socket setup, packet construction, checksums, asynchronous sending, and receiving.
+socket setup, packet construction, checksums, asynchronous sending, receiving,
+and the beginning of reply parsing.
 The earlier TCP scanner and banner grabbing are explained briefly for context.
 
 ## Contents
@@ -26,12 +27,17 @@ The earlier TCP scanner and banner grabbing are explained briefly for context.
 13. [Tests and development commands](#13-tests-and-development-commands)
 14. [What remains unfinished](#14-what-remains-unfinished)
 15. [Reading list](#15-reading-list)
+16. [Learning to parse packet bytes](#16-learning-to-parse-packet-bytes)
 
 ## 1. Current state and overall flow
 
 The code builds a TCP SYN header, prepares and registers a raw socket, sends the
 header, and waits for one raw packet. It does not yet validate or match that packet
 to the probe. It still returns an `Unknown` port state.
+
+An IPv4 parser is now written but is not called from the receive path yet. TCP
+parsing currently checks only the minimum segment length. Matching, classification,
+and cleanup are still scaffolding. Result mapping is implemented separately.
 
 Passing tests and compilation do not establish that the full SYN scanner works
 on a real network. We have not validated this path with a live scan.
@@ -642,6 +648,59 @@ checks time again, and calls `recv` through `try_io`. It returns one packet's
 initialized bytes as a vector. It retries temporary conditions but does not
 discard unrelated TCP packets: identifying those is still future work.
 
+### `parse_ipv4_packet`
+
+Checks minimum size, IPv4 version, header length, total length, TCP protocol,
+header checksum, and fragmentation. It then extracts source and destination
+addresses and returns a TCP segment slice limited to the declared total length.
+It does not validate the TCP segment or establish that the packet answers our
+probe. IPv4 parser-specific tests have not been added yet.
+
+### `parse_tcp_reply`
+
+Currently rejects TCP segments shorter than 20 bytes, then returns the explicit
+not-implemented error. The next exercise is reading the data offset from the
+upper four bits of TCP byte 12 and validating the resulting header length.
+Checksum verification and field extraction remain to be implemented.
+
+### `match_syn_reply`
+
+Scaffolding for comparing parsed addresses, reversed ports, acknowledgment, and
+flags with the retained `SynProbe`. It currently returns an error rather than
+pretending a packet matches or does not match.
+
+### `classify_syn_reply`
+
+Scaffolding for mapping a validated, matching reply to a measured port state.
+The planned `Option` permits an unsupported flag combination to yield no
+classification. It currently returns a not-implemented error.
+
+### `build_rst_header`
+
+Scaffolding for constructing a reset using the original probe and matching reply.
+It needs different sequence/flag handling from the SYN builder and is unfinished.
+
+### `cleanup_syn_probe`
+
+Scaffolding for bounded asynchronous reset cleanup. A cleanup failure must not
+erase an already measured open state. It currently performs no operations.
+
+### Supporting models and `map_syn_result`
+
+[src/model/syn.rs](../src/model/syn.rs) defines three small data containers:
+
+- `ParsedIpv4Packet<'a>` owns its IP address values but borrows the TCP bytes.
+- `TcpReply` will contain fields extracted from a validated TCP segment.
+- `SynProbe` retains the original endpoints and sequence number for matching.
+
+The lifetime `'a` connects the borrowed TCP slice to the input packet's lifetime.
+It prevents retaining that view after the owning receive vector has been dropped.
+
+[map_syn_result](../src/mapper/syn.rs) is implemented but not yet wired in. It
+copies measured status and diagnostic fields into a TCP `ScanResult`, leaving
+application service and banner fields empty. Its current `Result` signature is
+retained from scaffolding even though construction has no failure branch.
+
 ## 12. Library functions and methods
 
 | API or syntax | Purpose in this implementation |
@@ -723,19 +782,19 @@ it in Cargo's binary directory, which must be on PATH. A previously installed
 
 ## 14. What remains unfinished
 
-The next work is interpreting `_packet`, not assuming it answers the probe.
+The IPv4 parser is written and awaiting dedicated tests. The next work is
+finishing TCP parsing and integrating parsing with `_packet` reception.
 
-1. Validate minimum IPv4 length and version.
-2. Read the IPv4 header length, validate total length, protocol, and fragmentation.
-3. Locate and validate the TCP header and checksum.
-4. Match source/destination addresses, reversed ports, and appropriate
+1. Add IPv4 parser tests, including malformed lengths and checksum failures.
+2. Finish TCP header-length validation, checksum verification, and field extraction.
+3. Match source/destination addresses, reversed ports, and appropriate
    acknowledgment/flags against the retained probe values.
-5. Ignore unrelated packets and receive again using the same deadline.
-6. Classify valid replies and timeouts, preserving uncertainty and local errors.
-7. Implement appropriate RST cleanup, accounting for kernel TCP behavior.
-8. Replace the unconditional Unknown result with real measurements.
-9. Add packet-parser, matcher, receive/deadline, and error-path tests.
-10. Update CLI help and review transport labels so SYN measurements report TCP.
+4. Wire parsing and matching; ignore unrelated packets under the same deadline.
+5. Classify valid replies and timeouts, preserving uncertainty and local errors.
+6. Implement appropriate RST cleanup, accounting for kernel TCP behavior.
+7. Use the result mapper to replace the unconditional Unknown result.
+8. Add TCP-parser, matcher, receive/deadline, and error-path tests.
+9. Update CLI help and review transport labels so SYN measurements report TCP.
 
 The raw socket currently returns the first received TCP packet, which may be
 unrelated. No successful classification should be inferred from that alone.
@@ -782,3 +841,119 @@ Read a small section, then return to the corresponding function in this project.
 The protocol standards describe behavior; Linux manuals explain the OS interface;
 Rust and crate documentation explain how our program expresses it. Use all three
 layers when a detail is unclear.
+
+## 16. Learning to parse packet bytes
+
+### What "low level" means in this project
+
+You are working with two kinds of contracts:
+
+- A protocol defines what each byte and bit means on the wire.
+- An OS API defines how your program exchanges bytes with a socket.
+
+Rust supplies arrays, slices, integers, and error handling to express those
+contracts. There is no automatic relationship between a received byte array and
+your `TcpReply` struct: the parser must check and translate the fields.
+
+Parsing bytes with checked indexing and explicit integer conversions can remain
+safe Rust. Low-level networking does not mean every operation needs `unsafe`.
+Our unsafe blocks have specific contracts around socket registration and
+initialized receive-buffer bytes.
+
+### How to read a header diagram
+
+The IPv4 and TCP standards draw headers as rows of 32 bits: four bytes per row.
+Start counting byte indexes from zero. Follow each field's width and position,
+then compare it with the parser's indexing. Multi-byte integer fields use
+big-endian conversion; one-byte bit fields need masks or shifts.
+
+The table below summarizes fields used by our current code and next exercise.
+The layouts come from [IPv4 section 3.1](https://www.rfc-editor.org/rfc/rfc791.html#section-3.1)
+and [TCP section 3.1](https://www.rfc-editor.org/rfc/rfc9293.html#section-3.1).
+
+| Header | Byte indexes | How our parser interprets the field |
+| --- | --- | --- |
+| IPv4 | 0, upper four bits | Version: shift right by four; require 4. |
+| IPv4 | 0, lower four bits | IHL: mask with `0x0F`, then multiply by four. |
+| IPv4 | 2–3 | Total packet length: read as big-endian `u16`. |
+| IPv4 | 6–7 | Flags and fragment offset: read as big-endian `u16`, then mask. |
+| IPv4 | 9 | Payload protocol: require 6 for TCP. |
+| IPv4 | 12–15 | Source address: four octets. |
+| IPv4 | 16–19 | Destination address: four octets. |
+| TCP | 12, upper four bits | Data offset: shift right by four, then multiply by four. |
+
+The TCP indexes start at the beginning of `tcp_segment`, not the beginning of
+the original IPv4 buffer. Use the validated IPv4 header length to locate it.
+
+### A mask versus a shift
+
+Take the example byte `0x45`:
+
+```text
+0x45                 = 0100 0101
+0x45 >> 4            = 0000 0100 = version 4
+0x45 & 0x0F          = 0000 0101 = IHL 5
+IHL 5 times 4 bytes  = 20 bytes of IPv4 header
+```
+
+For TCP, byte 12 might be `0x50`: the upper four bits contain 5, so its header
+is 20 bytes. IPv4 IHL and TCP data offset use different positions, even though
+both encode a count of four-byte words.
+
+`&` on integers performs a bitwise AND. `&&` combines boolean conditions;
+`||` accepts either boolean condition. These are different operations. A
+validation guard usually joins independent reasons for rejection using `||`.
+See the [Rust Reference on operators](https://doc.rust-lang.org/reference/expressions/operator-expr.html#arithmetic-and-logical-binary-operators).
+
+### Length checks must precede slicing
+
+Our parser uses the following sequence:
+
+1. Require 20 received bytes before reading fixed IPv4 fields.
+2. Require version 4 before interpreting the layout as IPv4.
+3. Require `20 <= header_len <= bytes.len()`.
+4. Require `header_len <= total_len <= bytes.len()`.
+5. Verify the protocol and IPv4 header checksum.
+6. Reject unsupported fragmentation.
+7. Borrow `bytes[header_len..total_len]` as the TCP segment.
+
+These checks prevent unsafe assumptions and out-of-bounds panics. For a 44-byte
+IPv4 packet with a 24-byte header, TCP starts at byte 24, not byte 20. If the
+received buffer has extra bytes after the declared packet end, the parser does
+not include them in the returned TCP segment.
+
+TCP parsing needs its own minimum-size check and data-offset validation. A
+valid IPv4 header does not prove that its payload is a valid TCP header.
+
+### Fragmentation check
+
+The current parser reads the combined flags/offset word and rejects either:
+
+- `fragment & 0x2000 != 0`: more fragments follow.
+- `fragment & 0x1FFF != 0`: this piece has a nonzero fragment offset.
+
+The parser does not reassemble fragments. The Don't Fragment flag alone is
+allowed. This is our parser's explicit scope, not a claim that every packet
+delivered by the OS will necessarily arrive fragmented.
+
+### A short reading path
+
+Read these in order, using your code to connect the explanation to an example:
+
+1. [Beej's Guide to Network Programming](https://beej.us/guide/bgnet/html/split/):
+   start with chapters 2 and 3 for sockets, IP addresses, ports, and byte order;
+   then chapter 5 for socket operations. Its examples are C, but the OS concepts
+   carry over to Rust's socket APIs.
+2. [RFC 791, section 3.1](https://www.rfc-editor.org/rfc/rfc791.html#section-3.1):
+   read the IPv4 header diagram beside `parse_ipv4_packet`.
+3. [RFC 9293, section 3.1](https://www.rfc-editor.org/rfc/rfc9293.html#section-3.1):
+   read the TCP header diagram beside `write_syn_fields` and `parse_tcp_reply`.
+4. [Rust Reference: operators](https://doc.rust-lang.org/reference/expressions/operator-expr.html):
+   use it when masks, shifts, comparisons, and boolean operators look similar.
+5. [Rust Book: unsafe Rust](https://doc.rust-lang.org/book/ch20-01-unsafe-rust.html):
+   learn why our two unsafe operations require explicit reasoning; this is
+   background for reviewing them, not a reason to make the packet parser unsafe.
+
+For each field, ask: where is it, how wide is it, how is it encoded, and what
+must be checked before using it? Answering those four questions is the core
+skill behind these parsing exercises.
