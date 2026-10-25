@@ -3,6 +3,9 @@
 pub mod progress;
 pub mod report;
 pub mod service_information;
+// Learning scaffolding: used when SYN response handling is implemented.
+#[allow(dead_code)]
+pub mod syn;
 
 use self::service_information::ServiceInformation;
 use std::time::Duration;

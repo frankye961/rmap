@@ -4,6 +4,7 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use std::time::{Duration, Instant};
 
+use crate::model::syn::{ParsedIpv4Packet, SynProbe, TcpReply};
 use crate::model::{PortStatus, ScanMode, ScanResult};
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 
@@ -438,6 +439,97 @@ async fn receive_raw_packet(
             Err(_) => continue,
         }
     }
+}
+
+/// Validate IPv4 version, IHL, total length, header checksum, protocol, and
+/// fragmentation before borrowing the TCP segment. Do not assume a 20-byte IP header.
+fn parse_ipv4_packet(_bytes: &[u8]) -> Result<ParsedIpv4Packet<'_>, String> {
+    if _bytes.len() < 20 {
+        return Err("Byte length is too small".into());
+    }
+
+    let _version = _bytes[0] >> 4;
+    let _header_len = usize::from(_bytes[0] & 0x0F) * 4;
+
+    if _version != 4 {
+        return Err("Packet is not IPv4".into());
+    }
+
+    if _header_len < 20 || _header_len > _bytes.len() {
+        return Err("Header length is too big".into());
+    }
+
+    let _total_len = usize::from(u16::from_be_bytes([_bytes[2], _bytes[3]]));
+
+    if _total_len < _header_len || _total_len > _bytes.len() {
+        return Err("Invalid IPv4 total length".into());
+    }
+
+    if _bytes[9] != 6 {
+        return Err("IPv4 packet does not contain TCP".into());
+    }
+
+    if (internet_checksum(&_bytes[.._header_len])? != 0) {
+        return Err("Invalid IPv4 header checksum".into());
+    }
+
+    let _fragment = u16::from_be_bytes([_bytes[6], _bytes[7]]);
+
+    if _fragment & 0x2000 != 0 || _fragment & 0x1FFF != 0 {
+        return Err("Fragmented IPv4 packets are not supported".into());
+    }
+
+    let _source = Ipv4Addr::new(_bytes[12], _bytes[13], _bytes[14], _bytes[15]);
+    let _destination = Ipv4Addr::new(_bytes[16], _bytes[17], _bytes[18], _bytes[19]);
+
+    Ok(ParsedIpv4Packet {
+        source: _source,
+        destination: _destination,
+        tcp_segment: &_bytes[_header_len.._total_len],
+    })
+}
+
+/// Validate TCP length, data offset, and pseudo-header checksum, then extract fields.
+/// Length and checksum calculations must include any payload and TCP options.
+fn parse_tcp_reply(_packet: &ParsedIpv4Packet<'_>) -> Result<TcpReply, String> {
+    Err("TCP reply parsing is not implemented".into())
+}
+
+/// Compare reversed addresses and ports, acknowledgment, and acceptable flags
+/// against the original probe. Use wrapping sequence arithmetic; ignore unrelated replies.
+fn match_syn_reply(
+    _probe: &SynProbe,
+    _packet: &ParsedIpv4Packet<'_>,
+    _reply: &TcpReply,
+) -> Result<bool, String> {
+    Err("SYN reply matching is not implemented".into())
+}
+
+/// Classify an already validated and matched reply. Return None for a flag
+/// combination that does not establish a supported outcome; timeouts are handled separately.
+fn classify_syn_reply(_reply: &TcpReply) -> Result<Option<PortStatus>, String> {
+    Err("SYN reply classification is not implemented".into())
+}
+
+/// Build an appropriate reset for a validated matching SYN/ACK, including its checksum.
+/// Do not reuse the SYN builder unchanged: reset flags and sequence handling differ.
+fn build_rst_header(_probe: &SynProbe, _reply: &TcpReply) -> Result<[u8; 20], String> {
+    Err("TCP reset header construction is not implemented".into())
+}
+
+/// Send reset cleanup through nonblocking readiness with a bounded deadline.
+/// Account for kernel TCP reset behavior. The caller preserves measured port status
+/// independently of cleanup failure; no cleanup or network I/O occurs in this scaffold.
+async fn cleanup_syn_probe(
+    _socket: &AsyncFd<Socket>,
+    _probe: &SynProbe,
+    _reply: &TcpReply,
+    _deadline: tokio::time::Instant,
+) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "SYN probe cleanup is not implemented",
+    ))
 }
 
 #[cfg(test)]
