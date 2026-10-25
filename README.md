@@ -1,16 +1,28 @@
 # rmap (ALPHA version)
 
-Current version: **0.4.4**.
+Current version: **0.5.0**.
+
+## Version 0.5.0 milestone: TCP SYN scanning
+
+The basic IPv4 SYN pipeline is now connected end to end: construct a SYN, send
+through a nonblocking Linux raw socket, validate and match replies, classify
+open/closed ports, perform bounded reset cleanup, and report measured TCP results.
+Malformed or unrelated traffic does not end a probe or extend its deadline.
+
+The implementation is split into small modules under `src/scan/syn/`: orchestration,
+packet bytes, reply processing, and socket I/O. Offline tests cover the parsing
+and result flow, including cleanup failures that preserve open ports. This milestone
+does not claim live raw-packet validation or production readiness at high concurrency.
 
 `rmap` aims to be a network scanner inspired by Nmap, written in Rust and extended with AI interpretation. Its goal is to find and describe exposed services, then help a user understand what observed service versions might mean, including possible CVE leads. Scan measurements and AI conclusions stay separate so the tool can show what it observed without presenting a model's guess as a fact.
 
-The current implementation accepts individual IPv4 addresses, target lists, and CIDR subnets. It scans each unique host once, probes its selected TCP or UDP ports concurrently, collects limited banners, probes HTTP on port 80, and can ask DeepSeek to research public CVEs and exploit references using a web search tool. It does not yet offer Nmap's range of scan methods, host discovery, broad service fingerprinting, or exhaustive vulnerability detection. Building it is also a way to learn Rust networking, I/O, timeouts, and error handling.
+The current implementation accepts individual IPv4 addresses, target lists, and CIDR subnets. It scans each unique host once using TCP connect, IPv4 TCP SYN, or UDP probes. TCP connect mode collects limited banners and probes HTTP on port 80. Optional DeepSeek interpretation can research public CVEs and exploit references using a web search tool. It does not yet offer Nmap's range of scan methods, host discovery, broad service fingerprinting, or exhaustive vulnerability detection. Building it is also a way to learn Rust networking, I/O, timeouts, and error handling.
 
 ## How a run works
 
 1. The CLI validates every entry in the required IPv4 target list and any supplied options, then removes duplicate targets while retaining their first occurrence. Omitted options default to TCP, all ports from 1 through 65535, a timeout of 1000 ms, and up to 256 concurrent probes.
-2. Hosts are processed one at a time. For each host, the common scanner entry point schedules the selected transport through bounded Tokio tasks on a shared runtime. UDP sends an empty datagram to each selected port and waits for a response. For each TCP port, the scanner attempts a TCP connection and records its elapsed connection time and outcome in a `ScanResult`.
-3. On an open port other than 80, it reads a passive banner and stores the collected bytes separately from the reason reading stopped. On open port 80, it sends an HTTP `HEAD` probe using a separate connection.
+2. Hosts are processed one at a time. For each host, the common scanner entry point schedules the selected mode through bounded Tokio tasks on a shared runtime. UDP sends empty datagrams, TCP connect attempts normal connections, and SYN mode sends raw TCP SYN packets. Each mode records its measured outcomes in `ScanResult` values.
+3. In TCP connect mode, open ports other than 80 receive passive banner reads, while port 80 gets a separate HTTP `HEAD` probe. SYN mode sends a raw TCP SYN and validates response checksums, reversed endpoints, flags, and acknowledgment. It does not collect application banners.
 4. Progress is reported on stderr while ports are scanned. Each host’s measured table prints after its scan and before its optional AI research. Full-range scans and `--ports` lists containing ranges show only confirmed open ports; lists of individual ports show every selected outcome. AI configuration is validated before scanning; configuration errors disable the AI step without stopping the scan.
 5. With `--ai`, the program sends bounded observations for the current host to DeepSeek through Rig before moving to the next host. With a Brave Search key configured, the agent researches CVEs, vendor and distribution advisories, and Exploit-DB references using a public web search tool. An optional local advisory file can supplement the web evidence. Interpretation and retrieved source links appear separately from measurements. AI or search failures leave the scan report visible.
 
@@ -79,8 +91,9 @@ Subnet selection does not imply that every selected address is online. An addres
 
 | Option | Meaning |
 | --- | --- |
-| `--tcp` | Run the TCP connect scanner; default when neither transport flag is supplied |
+| `--tcp` | Select TCP; normal connect scanning unless `--syn` is also supplied (TCP is the default) |
 | `--udp` | Send an empty UDP probe to each selected port and wait for a response |
+| `--syn` | Run IPv4 TCP SYN discovery using Linux raw sockets; requires `CAP_NET_RAW`, no banner grabbing |
 | `--target TARGET[,TARGET...]` | IPv4 addresses and CIDR subnets; at most 4,096 unique targets, deduplicated in first-occurrence order; hostnames and IPv6 are not accepted |
 | `--ports LIST` | Comma-separated ports and inclusive ranges, such as `22,80-82,443`; omitting it selects all ports from 1 through 65535 |
 | `--exclude-ports LIST` | Ports and inclusive ranges to remove from an earlier explicit `--ports` list; may be given once and must leave at least one selected port |
@@ -89,7 +102,38 @@ Subnet selection does not imply that every selected address is online. An addres
 | `--ai` | Request DeepSeek interpretation after the scan report |
 | `--help`, `-h` | Show command syntax without scanning |
 
-Only `--target` is required. Without a transport flag, rmap uses TCP. Without `--ports`, it selects ports 1–65535. Without `--timeout-ms`, it uses 1000 ms. Transport flags cannot be combined or repeated. Explicit `--ports` and `--timeout-ms` flags still require valid, nonempty values; invalid input stops the run before any connection attempt.
+Only `--target` is required. Without a transport flag, rmap uses TCP. Without `--ports`, it selects ports 1–65535. Without `--timeout-ms`, it uses 1000 ms. `--tcp` and `--udp` cannot be combined or repeated. `--syn` can be supplied alone or with `--tcp` in either order; it cannot be repeated or combined with `--udp`. Explicit `--ports` and `--timeout-ms` flags still require valid, nonempty values; invalid input stops the run before any connection attempt.
+
+### TCP SYN scanning
+
+`--syn` selects raw TCP SYN scanning. Both `--syn` and `--tcp --syn` work;
+`--udp --syn` is rejected. It prepares
+a nonblocking raw TCP socket before sending, then ignores malformed and unrelated
+packets until a matching response arrives or the shared send/receive deadline expires.
+SYN/ACK means open; RST/ACK means closed. Silence is tentatively filtered, with
+filtering explicitly unconfirmed. Socket, permission, and other local failures
+remain undetermined. Progress and result rows use `/tcp`, since SYN is a TCP scan
+technique rather than another transport.
+
+For open results, reset cleanup uses at most 100 ms of the remaining probe budget.
+Cleanup failure appears as a diagnostic while the measured state stays open.
+Elapsed time includes setup and response waiting but excludes cleanup. The timeout
+starts after setup and is shared by sending and reception.
+
+This initial implementation sends one probe per port, requires an ACK-bearing
+response, and does not process ICMP errors, retry unanswered probes, perform IPv6
+scans, or identify application services in SYN mode. Linux may also generate its
+own resets. Offline tests exercise parsers and orchestration; privileged raw
+packet behavior and performance at high concurrency have not been live-validated.
+Start with a small explicit port list and low concurrency when validating it on
+an authorized test host. Raw-socket availability is checked before scheduling
+ports; a permission failure explains `CAP_NET_RAW` rather than producing an empty
+scan report. Full scans still show only open rows, but undetermined probes now
+have a visible count and example error, including resource exhaustion. An empty
+open-port table alone does not prove every probe succeeded.
+
+See [the SYN learning guide](docs/syn-learning-guide.md) for the implementation
+flow and remaining validation work.
 
 To exclude ports from an explicit list, place `--exclude-ports` after `--ports`:
 
@@ -139,6 +183,37 @@ Higher limits are not always faster: socket limits, packet loss, and target rate
 When `--ports` is omitted or its value contains a range, the table shows only ports measured as `open`, plus the number shown and total scanned. This includes UDP only when a response was received; silent `open|filtered` ports are hidden. If none are open, an explicit message says so. Hidden rows remain in the measured result collection and can still enter the bounded AI context. Explicit lists of individual ports continue to display every outcome, including closed, filtered, uncertain, and error results. A range in `--exclude-ports` alone does not change the display mode.
 
 Async reduces thread overhead; it does not shorten the configured timeout or bypass network and socket limits. The default concurrency remains 256 and the maximum remains 1024.
+
+On Linux, rmap checks the process's soft open-file limit and current descriptor
+usage after starting Tokio. It leaves 32 descriptors available for other work and
+budgets one per TCP/UDP probe or two per SYN probe. When necessary, it prints a
+notice and reduces the requested concurrency; every selected port stays queued.
+If there is no safe descriptor budget, scanning stops with an error. Where
+`/proc` information is unavailable, the configured limit is used unchanged.
+This is a local resource guard, not adaptive network pacing or a retry mechanism.
+
+For a timeout-heavy full scan, a rough duration estimate is
+`ports / effective concurrency × timeout`. With 65,535 ports and a one-second
+timeout, that is about 256 seconds at 256 concurrent probes or 67 seconds at 984,
+before extra processing and banner waits. Fast refusals can finish sooner.
+The TCP budget uses one socket because the initial connection is dropped before
+the separate HTTP request; SYN retains two sockets at once.
+
+If a full scan misses ports found by a smaller scan, inspect any `Undetermined
+probes` count and `Example failure` in the report. A very fast completion does not
+establish that every port returned a network response. Check your shell's soft
+descriptor limit with `ulimit -Sn`, and compare the same explicit ports with lower
+concurrency before raising the timeout:
+
+```bash
+rmap --tcp --target 192.0.2.21 --ports 21,22,80,111,139,445,2049,2121,8000 --concurrency 32 --timeout-ms 1000
+```
+
+Nmap's default port selection differs from rmap's full range. Compare the same
+ports, scan mode, and target conditions. Local resource errors, packet loss, and
+target rate limiting can affect observations; the descriptor guard cannot
+guarantee identical results. Service labels are also separate: rmap leaves an
+unidentified service as `-`, even when the port is confirmed open.
 
 ## Understanding scan results
 
@@ -429,6 +504,12 @@ src/
 ├── scan/
 │   ├── mod.rs          Target validation and concurrent dispatch
 │   ├── worker.rs       Bounded async tasks and ordered result collection
+│   ├── resources.rs    Descriptor budget and effective concurrency
+│   ├── syn/
+│   │   ├── mod.rs      Probe setup, ownership, and orchestration
+│   │   ├── packet.rs   IPv4/TCP bytes, parsing, and checksums
+│   │   ├── reply.rs    Matching, classification, and response loop
+│   │   └── socket.rs   Linux sockets and shared Tokio readiness
 │   ├── tcp.rs          TCP connections, outcomes, and passive banners
 │   ├── identify.rs     SSH, HTTP, FTP, and SMTP banner identification
 │   ├── udp.rs          UDP probes and outcome classification
@@ -436,9 +517,11 @@ src/
 ├── model/
 │   ├── mod.rs          Scan results, preserved banner bytes, and AI data
 │   ├── progress.rs     Scan startup and throttled progress on stderr
+│   ├── syn.rs          Parsed packets, replies, and original probe data
 │   └── report.rs       Safe banner previews and terminal report rendering
 ├── mapper/
 │   ├── mod.rs          Model mapping modules
+│   ├── syn.rs          Map SYN measurements to shared TCP results
 │   └── service_information.rs  Construct and apply service information
 ├── utils/
 │   ├── mod.rs          Shared utility modules

@@ -16,9 +16,26 @@ rmap --help
 
 Cargo's installation directory, usually `~/.cargo/bin`, must be on `PATH`. Reinstall after source changes when invoking the installed `rmap`; building the project alone does not update that executable.
 
-## Select TCP or UDP
+## Select TCP connect, TCP SYN, or UDP
 
-Only `--target` is required; it accepts a comma-separated list of numeric IPv4 addresses and CIDR subnets. Omit the transport flags to use TCP, or select `--udp` explicitly. The flags cannot be combined or repeated. Omit `--timeout-ms` to use 1000 milliseconds, or supply a positive integer to override it. Optionally select comma-separated ports and inclusive ranges from 1 through 65535 with `--ports`, for example `22,80-82,443`. Omitting `--ports` selects all 65535 ports in ascending order. An explicitly empty value or a `--ports` flag without a value is rejected. Hostnames and IPv6 are not accepted. TCP and UDP probes run concurrently, with up to 256 active async probes by default. The final report preserves the supplied port order, regardless of completion order.
+Only `--target` is required; it accepts a comma-separated list of numeric IPv4 addresses and CIDR subnets. Omit the mode flags to use TCP connect, or select `--udp` or `--syn` explicitly. `--tcp` and `--udp` cannot be combined or repeated. `--syn` works alone or with `--tcp` in either order; it cannot be repeated or combined with `--udp`. Omit `--timeout-ms` to use 1000 milliseconds, or supply a positive integer to override it. Optionally select comma-separated ports and inclusive ranges from 1 through 65535 with `--ports`, for example `22,80-82,443`. Omitting `--ports` selects all 65535 ports in ascending order. An explicitly empty value or a `--ports` flag without a value is rejected. Hostnames and IPv6 are not accepted. Probes run concurrently, with up to 256 active tasks by default. The final report preserves the supplied port order, regardless of completion order.
+
+### SYN mode
+
+`--syn` (or `--tcp --syn`) uses Linux raw TCP sockets and needs `CAP_NET_RAW`.
+Raw-socket availability is checked before ports are scheduled; missing privileges
+produce an actionable error. Open-only reports show a count and example error
+for undetermined probes instead of silently hiding local failures. It does not run the
+TCP connect banner reader or HTTP probe. Validated matching SYN/ACK and RST/ACK
+responses become open and closed TCP results. No matching response before the
+shared send/receive deadline is tentatively filtered; local I/O failures are
+undetermined. Cleanup diagnostics do not erase an open result.
+
+Reset cleanup has at most 100 ms of the remaining probe deadline. Setup time is
+included in elapsed measurements but precedes the timeout budget. No ICMP error
+interpretation, unanswered-probe retries, or live performance validation is
+included. Use a small explicit port list and low concurrency for initial
+authorized validation. See [README SYN mode](../README.md#tcp-syn-scanning).
 
 ```bash
 rmap --target 192.0.2.10,192.0.2.11,192.0.2.10 --ports 22,80-82
@@ -79,6 +96,40 @@ rmap --target 192.0.2.21 --concurrency 256
 ```
 
 More concurrent probes do not guarantee better performance. Network latency, banner waits, socket limits, and target rate limiting affect speed and observed timeouts. Reduce concurrency when resource errors or excessive timeouts appear.
+
+On Linux, rmap lowers concurrency when necessary to fit the current process's
+soft descriptor limit. It counts open descriptors after Tokio starts, leaves 32
+for other work, and allows one per TCP/UDP probe or two per SYN probe. A notice
+reports the reduced limit; all selected ports are still scheduled. An exhausted
+budget stops the scan with an error. If `/proc` cannot be read, the requested
+limit is used. This check does not add retries or adapt to network congestion.
+
+If most ports stay silent, estimate full-scan time as
+`port count / effective concurrency × timeout`. At 1000 ms, 65,535 ports take
+roughly 256 seconds at concurrency 256, or 67 seconds at concurrency 984,
+excluding extra overhead and banner waits. This is an estimate, not a deadline;
+immediate refusals can be much faster. A one-second full scan is not the expected
+baseline when most probes must wait for their timeout.
+
+For a full scan that misses ports observed in a small scan:
+
+1. Check the report's undetermined-probe count and sample error. A local failure
+   is not evidence of a closed or filtered port.
+2. Run `ulimit -Sn` in the shell used to start rmap to inspect its soft open-file
+   limit. Watch for a concurrency-reduction notice.
+3. Compare the same explicit ports using lower concurrency, for example:
+
+   ```bash
+   rmap --tcp --target 192.0.2.21 --ports 21,22,80,111,139,445,2049,2121,8000 --concurrency 32 --timeout-ms 1000
+   ```
+
+4. If timeouts remain, investigate network loss and target rate limiting, then
+   consider a longer timeout. Match port selection and scan mode when comparing
+   tools. These single-attempt probes do not provide Nmap's adaptive scheduling.
+
+After rebuilding changes, use `./target/release/rmap` directly or reinstall with
+`cargo install --path . --locked`; an existing installed binary is not replaced
+by `cargo build --release`.
 
 When `--ports` is omitted or its value contains a range, only confirmed `open` ports are printed in the measured table. UDP `open|filtered` rows are hidden. The report gives the number of open ports shown and total scanned, or says no open ports were found. This filters presentation only: all outcomes remain available for progress and bounded AI context. With an explicit list of individual ports, every selected outcome is displayed. A range in exclusions alone does not change this mode.
 

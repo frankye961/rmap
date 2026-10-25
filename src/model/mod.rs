@@ -3,6 +3,9 @@
 pub mod progress;
 pub mod report;
 pub mod service_information;
+// Parsed reply fields include values retained for future protocol diagnostics.
+#[allow(dead_code)]
+pub mod syn;
 
 use self::service_information::ServiceInformation;
 use std::time::Duration;
@@ -14,13 +17,23 @@ pub const MAX_CONCURRENCY: usize = 1024;
 pub enum ScanMode {
     Tcp,
     Udp,
+    Syn,
 }
 
 impl ScanMode {
+    /// SYN is a scan technique over TCP, not a separate transport protocol.
+    pub fn transport(self) -> Self {
+        match self {
+            Self::Syn => Self::Tcp,
+            mode => mode,
+        }
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Tcp => "tcp",
             Self::Udp => "udp",
+            Self::Syn => "syn",
         }
     }
 }

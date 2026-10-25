@@ -1,4 +1,4 @@
-//! Validate targets and dispatch bounded concurrent TCP or UDP probes.
+//! Validate targets and dispatch bounded concurrent TCP connect, SYN, or UDP probes.
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::time::Duration;
@@ -7,6 +7,8 @@ use crate::model::{MAX_CONCURRENCY, ScanMode, ScanResult};
 
 mod http;
 mod identify;
+mod resources;
+mod syn;
 mod tcp;
 mod udp;
 mod worker;
@@ -28,10 +30,20 @@ pub fn scan(
         ));
     }
     let targets = targets(&address, ports)?;
+    if mode == ScanMode::Syn {
+        syn::check_available()?;
+    }
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(|error| format!("Could not initialize scan runtime: {error}"))?;
+    let requested = concurrency.min(targets.len().max(1));
+    let concurrency = resources::concurrency_limit(mode, requested)?;
+    if concurrency < requested {
+        eprintln!(
+            "Reducing concurrent probes from {requested} to {concurrency} to leave file descriptors available."
+        );
+    }
     runtime.block_on(worker::run(
         &targets,
         concurrency,
@@ -40,6 +52,7 @@ pub fn scan(
             match mode {
                 ScanMode::Tcp => tcp::scan_port(target, timeout).await,
                 ScanMode::Udp => udp::scan_port(target, timeout).await,
+                ScanMode::Syn => syn::scan_port(target, timeout).await,
             }
         },
         on_result,

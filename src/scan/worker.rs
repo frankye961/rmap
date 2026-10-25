@@ -64,7 +64,7 @@ where
 fn failed_probe(target: SocketAddr, mode: ScanMode, started: Instant) -> ScanResult {
     ScanResult {
         port: target.port(),
-        transport: mode,
+        transport: mode.transport(),
         status: PortStatus::Unknown,
         service: None,
         elapsed: started.elapsed(),

@@ -1,6 +1,63 @@
 use super::{CliConfig, parse_cli};
 use crate::model::ScanMode;
 
+#[test]
+fn syn_mode_is_optional_and_tcp_connect_remains_the_default() {
+    assert_eq!(parse_cli(&arguments(&[])).unwrap().mode, ScanMode::Tcp);
+    assert_eq!(
+        parse_cli(&arguments(&["--syn"])).unwrap().mode,
+        ScanMode::Syn
+    );
+}
+
+#[test]
+fn tcp_syn_flags_are_accepted_in_either_order() {
+    for flags in [["--tcp", "--syn"], ["--syn", "--tcp"]] {
+        assert_eq!(parse_cli(&arguments(&flags)).unwrap().mode, ScanMode::Syn);
+    }
+}
+
+#[test]
+fn rejects_syn_combined_with_udp_or_repeated() {
+    for flags in [["--syn", "--udp"], ["--udp", "--syn"], ["--syn", "--syn"]] {
+        assert!(
+            parse_cli(&arguments(&flags)).is_err(),
+            "accepted modes: {flags:?}"
+        );
+    }
+}
+
+#[test]
+fn repeated_flags_remain_invalid_when_tcp_and_syn_are_combined() {
+    for flags in [
+        ["--tcp", "--syn", "--syn"],
+        ["--syn", "--tcp", "--tcp"],
+        ["--tcp", "--tcp", "--syn"],
+        ["--syn", "--tcp", "--udp"],
+    ] {
+        assert!(parse_cli(&arguments(&flags)).is_err());
+    }
+}
+
+#[test]
+fn full_scan_tcp_syn_command_preserves_defaults_and_concurrency() {
+    let args = [
+        "--tcp",
+        "--syn",
+        "--target",
+        "192.0.2.21",
+        "--concurrency",
+        "1024",
+    ]
+    .map(String::from);
+    let config = parse_cli(&args).unwrap();
+    assert_eq!(config.mode, ScanMode::Syn);
+    assert_eq!(config.concurrency, 1024);
+    assert_eq!(config.ports.len(), 65535);
+    assert!(config.open_only);
+    assert_eq!(config.timeout.as_millis(), 1000);
+}
+
 fn arguments(mode: &[&str]) -> Vec<String> {
     [
         "--target",

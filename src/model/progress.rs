@@ -72,7 +72,7 @@ fn format_progress(
     };
     format!(
         "Scanned {completed}/{total} ports ({percent:.1}%); last {port}/{}; elapsed {:.1}s",
-        mode.as_str(),
+        mode.transport().as_str(),
         elapsed.as_secs_f64()
     )
 }
