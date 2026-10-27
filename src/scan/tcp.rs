@@ -20,7 +20,7 @@ pub(super) async fn scan_port(target: SocketAddr, timeout: Duration) -> ScanResu
 
     let mut result = match connection {
         Ok(stream) => {
-            let (service, observation, banner) = if target.port() == 80 {
+            let (service, observation, banner) = if http::is_http_candidate(target.port()) {
                 drop(stream);
                 match http::probe(target, timeout).await {
                     Ok(response) => (Some("http".to_string()), response, None),
