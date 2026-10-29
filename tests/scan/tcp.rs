@@ -1,9 +1,86 @@
-use super::{banner_result, read_banner};
+use super::{apply_http_probe_result, banner_result, read_banner};
+use crate::model::{PortStatus, ScanMode, ScanResult};
 use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWriteExt, ReadBuf};
+
+fn measured_open_http_port(port: u16) -> ScanResult {
+    ScanResult {
+        port,
+        transport: ScanMode::Tcp,
+        status: PortStatus::Open,
+        service: None,
+        elapsed: Duration::from_millis(17),
+        error: None,
+        observation: None,
+        banner: None,
+        service_information: None,
+    }
+}
+
+#[test]
+fn http_identification_reaches_scan_results_without_changing_measurements() {
+    for port in [80, 8000, 8080, 8888] {
+        for (server, product, version, comments) in [
+            (
+                Some("Apache/2.4.68 (Debian)"),
+                Some("Apache"),
+                Some("2.4.68"),
+                Some("Debian"),
+            ),
+            (Some("Caddy"), Some("Caddy"), None, None),
+            (None, None, None, None),
+        ] {
+            let mut result = measured_open_http_port(port);
+            let information = super::identify::identify_http_server(server);
+            let detail = server.map(|server| format!("Server: {server}"));
+            apply_http_probe_result(&mut result, Ok((information, detail.clone())));
+            super::identify::collect_banner(&mut result);
+
+            assert_eq!(result.service.as_deref(), Some("http"));
+            let information = result.service_information.as_ref().unwrap();
+            assert_eq!(information.service.as_deref(), Some("http"));
+            assert_eq!(information.product.as_deref(), product);
+            assert_eq!(information.version.as_deref(), version);
+            assert_eq!(information.observation.as_deref(), comments);
+            assert_eq!(result.observation, detail);
+            assert_eq!(result.port, port);
+            assert_eq!(result.transport, ScanMode::Tcp);
+            assert_eq!(result.status, PortStatus::Open);
+            assert_eq!(result.elapsed, Duration::from_millis(17));
+            assert!(result.error.is_none());
+            assert!(result.banner.is_none());
+        }
+    }
+}
+
+#[test]
+fn http_probe_failure_preserves_the_open_port_without_inventing_a_service() {
+    let error = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .unwrap()
+        .head("://")
+        .build()
+        .unwrap_err();
+    let mut result = measured_open_http_port(8000);
+    apply_http_probe_result(&mut result, Err(error));
+    assert_eq!(result.status, PortStatus::Open);
+    assert_eq!(result.port, 8000);
+    assert_eq!(result.elapsed, Duration::from_millis(17));
+    assert!(result.service.is_none());
+    assert!(result.service_information.is_none());
+    assert!(result.error.is_none());
+    assert!(
+        result
+            .observation
+            .as_deref()
+            .unwrap()
+            .starts_with("HTTP probe failed: ")
+    );
+}
 
 // In-memory scripted reader; no socket or network calls are needed.
 struct ScriptedRead<F>(F);

@@ -18,6 +18,61 @@ pub(super) fn collect_banner(result: &mut ScanResult) {
     }
 }
 
+/// Identify a product/version and optional simple comment from a Server header.
+pub(super) fn identify_http_server(_server: Option<&str>) -> ServiceInformation {
+    match _server {
+        Some(header) => {
+            let _header = header.trim();
+            if _header.is_empty() {
+                return map_tcp_service("http", None, None, None);
+            }
+            let Some((software, comments)) = split_http_comment(_header) else {
+                return map_tcp_service("http", None, None, None);
+            };
+            if let Some((product, version)) = software.split_once('/') {
+                if is_http_component(product) && is_http_component(version) {
+                    return map_tcp_service("http", Some(product), Some(version), comments);
+                }
+                return map_tcp_service("http", None, None, None);
+            }
+
+            if is_http_component(software) {
+                map_tcp_service("http", Some(software), None, comments)
+            } else {
+                map_tcp_service("http", None, None, None)
+            }
+        }
+        None => map_tcp_service("http", None, None, None),
+    }
+}
+
+/// Separate one software token and an optional parenthesized comment.
+fn split_http_comment(_header: &str) -> Option<(&str, Option<&str>)> {
+    if _header.chars().any(|c| c.is_control() && c != '\t') {
+        return None;
+    }
+    let Some((software, suffix)) = _header.split_once(char::is_whitespace) else {
+        return Some((_header, None));
+    };
+    let comment = suffix.trim().strip_prefix('(')?.strip_suffix(')')?.trim();
+    // Nested or multiple comments are outside this initial parser's scope.
+    if comment
+        .chars()
+        .any(|c| matches!(c, '(' | ')') || c.is_control())
+    {
+        return None;
+    }
+    Some((software, (!comment.is_empty()).then_some(comment)))
+}
+
+/// Require a nonempty component without whitespace, a slash, or comment delimiters.
+fn is_http_component(_value: &str) -> bool {
+    !_value.is_empty()
+        && !_value
+            .chars()
+            .any(|c| c.is_whitespace() || matches!(c, '/' | '(' | ')'))
+}
+
 fn identify_service(banner: &[u8]) -> Option<ServiceInformation> {
     match identify_ssh(banner) {
         Some(information) => Some(information),
@@ -72,7 +127,7 @@ fn identify_ssh(banner: &[u8]) -> Option<ServiceInformation> {
 fn identify_http(banner: &[u8]) -> Option<ServiceInformation> {
     complete_lines(banner)
         .any(|line| line.starts_with(b"HTTP/"))
-        .then(|| map_tcp_service("http", None, None, None))
+        .then(|| identify_http_server(None))
 }
 
 fn identify_ftp(banner: &[u8]) -> Option<ServiceInformation> {

@@ -1,5 +1,9 @@
 # Architecture
 
+Version **0.5.1** adds automatic HTTP candidate probing and structured header
+identification in TCP connect scans. The IPv4 SYN pipeline introduced in 0.5.0
+continues to perform port discovery without application identification.
+
 rmap is a Rust network scanner inspired by Nmap, with optional AI research into observed services, possible CVEs, and public exploit references. It scans selected ports concurrently through bounded Tokio tasks for each unique IPv4 target using TCP connect, raw TCP SYN, or empty UDP probes. Hosts are processed sequentially.
 
 ## Flow through the application
@@ -12,7 +16,7 @@ flowchart TD
     Pool --> TCP[tcp.rs: TCP connect and banner reads]
     Pool --> UDP[udp.rs: empty UDP probes]
     Pool --> SYN[syn module: raw SYN and validated reply loop]
-    TCP --> HTTP[http.rs: HEAD probe on open port 80]
+    TCP --> HTTP[http.rs: HEAD probe on open HTTP candidate ports]
     TCP --> Results[Structured ScanResult values]
     HTTP --> Results
     UDP --> Results
@@ -49,7 +53,7 @@ flowchart TD
 | `src/scan/worker.rs` | Schedule bounded async tasks on a shared Tokio runtime, report completions, and restore input order |
 | `src/scan/tcp.rs` | TCP connection attempts, status classification, bounded passive reads, and collected-banner identification |
 | `src/scan/identify.rs` | Parse supported SSH, HTTP, FTP and SMTP banners into service information |
-| `src/scan/http.rs` | HTTP `HEAD` probe on open TCP port 80 and `Server` header extraction |
+| `src/scan/http.rs` | HTTP candidate selection, bounded `HEAD` probe, and structured `Server` header extraction |
 | `src/scan/udp.rs` | One empty UDP probe, receive timeout, and outcome classification |
 | `src/model/mod.rs` | Shared measured results, transport and status enums, and separate AI data |
 | `src/model/progress.rs` | Display selected port count, timeout and throttled completion progress on stderr |
@@ -113,7 +117,22 @@ Reporting filters to confirmed open ports when `--ports` was omitted or contains
 
 Passive TCP banner reads continue across short reads until the newline, byte limit, timeout or connection close; the number of read calls does not determine the byte limit. TCP elapsed time measures the initial connection attempt. Later passive reads and HTTP probes have their own waits and are excluded from that value. A refused connection is closed; a connection timeout is tentatively filtered. Successful connections remain open even when later banner collection fails. After a TCP result is assembled, the identification module examines its preserved banner. Complete supported SSH identification lines supply an `ssh` label, and the `OpenSSH_` software identifier supplies the product and version. Optional comments preserve distribution information. The extracted fields also enter AI context. Unknown SSH implementations retain a protocol label without guessed product/version fields. A valid HTTP probe response supplies an `http` label; other observations may retain an unknown service label.
 
-Identification tries SSH, HTTP, FTP, then SMTP. Every parser uses `complete_lines` for CRLF-terminated lines and `map_tcp_service` to construct identification data. `starts_with_digit` supplies the shared version-prefix check. `collect_banner` applies identification through `apply_service_information`, preserving the port state, elapsed time, raw banner bytes, and read stop reason.
+Passive identification tries SSH, HTTP, FTP, then SMTP. Passive parsers use `complete_lines` for CRLF-terminated lines; service identification uses `map_tcp_service` to construct its model. `starts_with_digit` supplies the shared version-prefix check. `collect_banner` applies identification through `apply_service_information`, preserving the port state, elapsed time, raw banner bytes, and read stop reason.
+
+TCP automatically selects a separate HTTP `HEAD` probe for confirmed-open ports
+80, 8000, 8080, and 8888. `http::response_information` passes the original `Server`
+header to `identify_http_server` before making the escaped 64-byte console
+preview. The parser accepts one product or product/version, optionally followed
+by a simple parenthesized comment. `split_http_comment` separates the comment;
+`is_http_component` validates the product and version. Unsupported formats retain
+the HTTP label without guessing software fields. Missing or undecodable headers
+also leave software fields unknown.
+
+`http::probe` returns structured identification and the display observation.
+`tcp::apply_http_probe_result` applies that identification through the existing
+mapper and stores the observation, preserving the measured state and connection
+time. Probe errors become observations on the already-open result. This flow
+does not add application probing to SYN mode or infer an OS from comments.
 
 The SMTP parser first checks for an exact uppercase `SMTP` or `ESMTP` whitespace token, then requires a `220 ` or `220-` greeting prefix. It searches the remaining tokens for `Postfix` or `Exim`; the immediately following token is retained as a version only when it starts with an ASCII digit and contains ASCII alphanumeric characters, dots, hyphens, or underscores. Product and version are optional, so an unknown implementation still receives an `smtp` label. The same logic applies on nonstandard ports and is covered by in-memory fixtures.
 

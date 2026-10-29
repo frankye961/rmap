@@ -1,5 +1,9 @@
 # Running rmap
 
+Version **0.5.1** automatically probes HTTP on confirmed-open TCP ports 80, 8000,
+8080, and 8888. Product, version, and a simple parenthesized comment from the
+`Server` header are stored separately. No extra identification flag is required.
+
 Build with stable Rust supporting edition 2024:
 
 ```bash
@@ -15,6 +19,10 @@ rmap --help
 ```
 
 Cargo's installation directory, usually `~/.cargo/bin`, must be on `PATH`. Reinstall after source changes when invoking the installed `rmap`; building the project alone does not update that executable.
+
+After installation, `rmap --help` prints the startup banner with version
+`v0.5.1` without starting a scan. The same check can be made directly with
+`./target/release/rmap --help`.
 
 ## Select TCP connect, TCP SYN, or UDP
 
@@ -133,7 +141,17 @@ by `cargo build --release`.
 
 When `--ports` is omitted or its value contains a range, only confirmed `open` ports are printed in the measured table. UDP `open|filtered` rows are hidden. The report gives the number of open ports shown and total scanned, or says no open ports were found. This filters presentation only: all outcomes remain available for progress and bounded AI context. With an explicit list of individual ports, every selected outcome is displayed. A range in exclusions alone does not change this mode.
 
-TCP connects and then collects a passive banner, or sends an HTTP `HEAD` probe on open port 80. UDP sends an empty datagram; protocol-specific UDP requests and service identification are not implemented. A UDP timeout is reported as `open|filtered` because a listening service may ignore that datagram.
+TCP connects and then collects a passive banner, or automatically sends an HTTP `HEAD` probe on confirmed-open ports 80, 8000, 8080, and 8888. The port only selects a probe; a valid response supplies the HTTP service label. UDP sends an empty datagram; protocol-specific UDP requests and service identification are not implemented. A UDP timeout is reported as `open|filtered` because a listening service may ignore that datagram.
+
+HTTP identification parses a single product or product/version and an optional
+parenthesized comment from the original `Server` header. For example,
+`Apache/2.4.68 (Debian)` becomes product `Apache`, version `2.4.68`, and comment
+`Debian`; `Caddy` supplies a product without a version. These fields are stored
+in the scan result and available to optional AI context. The console keeps its
+escaped `Server:` preview. A valid response without a usable header still
+identifies HTTP. Unsupported or malformed header formats leave software fields
+unknown; probe failure preserves the measured open state. Comments are advertised
+information, not confirmed OS identification. HTTPS probing remains separate work.
 
 Passive banner recognition supports SSH, HTTP, selected FTP greetings, and SMTP greetings. For SMTP, a complete CRLF-terminated `220 ` or `220-` greeting must contain an exact uppercase `SMTP` or `ESMTP` token. The service label becomes `smtp`, even without a known product. Separate `Postfix` and `Exim` tokens supply a product; an immediately following supported version token supplies the version. Unknown fields stay unset. Port numbers do not determine the service label.
 

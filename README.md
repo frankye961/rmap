@@ -1,6 +1,22 @@
 # rmap (ALPHA version)
 
-Current version: **0.5.0**.
+Current version: **0.5.1**.
+
+## Version 0.5.1: automatic HTTP service identification
+
+TCP connect scans automatically send bounded HTTP `HEAD` probes on confirmed-open
+ports 80, 8000, 8080, and 8888. A valid response identifies HTTP; its original
+`Server` header supplies a product, optional version, and one optional
+parenthesized comment in structured scan results. For example,
+`Apache/2.4.68 (Debian)` yields `Apache`, `2.4.68`, and comment `Debian`.
+The console keeps the existing escaped `Server:` preview, and missing or
+unsupported headers leave software fields unknown. HTTP probe failure preserves
+the measured open state.
+
+This release has 134 passing offline tests, including header parsing and scanner
+result integration. Live HTTP probing has not been validated by the assistant.
+HTTPS, RPC/NFS, SMB, OS detection, and application probing after SYN discovery
+remain later work. No dependencies were added for this release.
 
 ## Version 0.5.0 milestone: TCP SYN scanning
 
@@ -16,13 +32,13 @@ does not claim live raw-packet validation or production readiness at high concur
 
 `rmap` aims to be a network scanner inspired by Nmap, written in Rust and extended with AI interpretation. Its goal is to find and describe exposed services, then help a user understand what observed service versions might mean, including possible CVE leads. Scan measurements and AI conclusions stay separate so the tool can show what it observed without presenting a model's guess as a fact.
 
-The current implementation accepts individual IPv4 addresses, target lists, and CIDR subnets. It scans each unique host once using TCP connect, IPv4 TCP SYN, or UDP probes. TCP connect mode collects limited banners and probes HTTP on port 80. Optional DeepSeek interpretation can research public CVEs and exploit references using a web search tool. It does not yet offer Nmap's range of scan methods, host discovery, broad service fingerprinting, or exhaustive vulnerability detection. Building it is also a way to learn Rust networking, I/O, timeouts, and error handling.
+The current implementation accepts individual IPv4 addresses, target lists, and CIDR subnets. It scans each unique host once using TCP connect, IPv4 TCP SYN, or UDP probes. TCP connect mode collects limited banners and automatically probes HTTP on ports 80, 8000, 8080, and 8888. Optional DeepSeek interpretation can research public CVEs and exploit references using a web search tool. It does not yet offer Nmap's range of scan methods, host discovery, broad service fingerprinting, or exhaustive vulnerability detection. Building it is also a way to learn Rust networking, I/O, timeouts, and error handling.
 
 ## How a run works
 
 1. The CLI validates every entry in the required IPv4 target list and any supplied options, then removes duplicate targets while retaining their first occurrence. Omitted options default to TCP, all ports from 1 through 65535, a timeout of 1000 ms, and up to 256 concurrent probes.
 2. Hosts are processed one at a time. For each host, the common scanner entry point schedules the selected mode through bounded Tokio tasks on a shared runtime. UDP sends empty datagrams, TCP connect attempts normal connections, and SYN mode sends raw TCP SYN packets. Each mode records its measured outcomes in `ScanResult` values.
-3. In TCP connect mode, open ports other than 80 receive passive banner reads, while port 80 gets a separate HTTP `HEAD` probe. SYN mode sends a raw TCP SYN and validates response checksums, reversed endpoints, flags, and acknowledgment. It does not collect application banners.
+3. In TCP connect mode, confirmed-open HTTP candidate ports (80, 8000, 8080, 8888) get a separate HTTP `HEAD` probe; other open ports receive passive banner reads. A valid HTTP response supplies structured service information. SYN mode sends a raw TCP SYN and validates response checksums, reversed endpoints, flags, and acknowledgment. It does not collect application banners.
 4. Progress is reported on stderr while ports are scanned. Each host’s measured table prints after its scan and before its optional AI research. Full-range scans and `--ports` lists containing ranges show only confirmed open ports; lists of individual ports show every selected outcome. AI configuration is validated before scanning; configuration errors disable the AI step without stopping the scan.
 5. With `--ai`, the program sends bounded observations for the current host to DeepSeek through Rig before moving to the next host. With a Brave Search key configured, the agent researches CVEs, vendor and distribution advisories, and Exploit-DB references using a public web search tool. An optional local advisory file can supplement the web evidence. Interpretation and retrieved source links appear separately from measurements. AI or search failures leave the scan report visible.
 
@@ -245,7 +261,16 @@ These are parser examples, not live scan results. SMTP identification is passive
 
 Reporting creates a printable preview from at most 64 banner bytes, escapes control bytes, and removes a trailing line ending. Longer banners receive a truncation marker. When reading stops after receiving some data, the report includes both the preview and the stop reason, such as `partial banner (read timed out)`. Creating this preview does not shorten or modify the stored bytes.
 
-For open port 80, the scanner makes an HTTP `HEAD` request. A valid HTTP response gives the port an `http` label; the report shows the `Server` header when present. The HTTP probe does not follow redirects or use a configured proxy. It does not display HTTP status codes. A failed probe or banner read does not change a successful TCP connection into a closed result.
+For open ports 80, 8000, 8080, and 8888, the scanner automatically makes an HTTP `HEAD` request. These ports select a probe; a valid response establishes the `http` label, even without a `Server` header. The report shows an escaped preview of that header when present. The HTTP probe does not follow redirects or use a configured proxy. It does not display HTTP status codes. A failed probe or banner read does not change a successful TCP connection into a closed result.
+
+The original `Server` header is parsed before display truncation. A single product
+such as `Caddy`, or a product/version such as `Apache/2.4.68`, populates
+`ScanResult.service_information`. One optional parenthesized comment is preserved
+separately: `Apache/2.4.68 (Debian)` supplies product `Apache`, version `2.4.68`,
+and comment `Debian`. Missing, undecodable, malformed, or unsupported headers keep
+HTTP identified with unknown software fields. Multiple products and nested or
+multiple comments are outside this initial parser's scope. These are advertised
+software details; a comment such as `Debian` is not confirmed OS detection.
 
 Service labels are deliberately limited. A program can run on an unexpected port, and a banner or `Server` header can be missing, misleading, or customized. The scanner does not verify a product version beyond the bytes it observed.
 
@@ -254,6 +279,8 @@ UDP uses a fresh local socket for each port and restricts responses to that targ
 ### Example TCP scan with AI research
 
 This recorded run uses `192.0.2.21` as an anonymized documentation address. Replace it with your authorized target. AI output is retained as recorded, including incomplete text; its CVE and exploit applicability claims are generated interpretations, not verified findings. Timings, search results, and model output vary between runs.
+
+This historical output predates automatic HTTP probing on the additional candidate ports.
 
 ```bash
 rmap --tcp --target 192.0.2.21 --ports 80,22,21,8080,443,111,139,445,2409,8000 --timeout-ms 1000 --ai
@@ -513,7 +540,7 @@ src/
 │   ├── tcp.rs          TCP connections, outcomes, and passive banners
 │   ├── identify.rs     SSH, HTTP, FTP, and SMTP banner identification
 │   ├── udp.rs          UDP probes and outcome classification
-│   └── http.rs         HTTP HEAD probe for open port 80
+│   └── http.rs         HTTP candidate selection, HEAD probe, and header extraction
 ├── model/
 │   ├── mod.rs          Scan results, preserved banner bytes, and AI data
 │   ├── progress.rs     Scan startup and throttled progress on stderr
