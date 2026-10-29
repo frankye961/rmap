@@ -1,7 +1,126 @@
 use std::time::Duration;
 
-use super::{collect_banner, identify_service};
+use super::{collect_banner, identify_http_server, identify_service};
+use crate::model::service_information::ServiceInformation;
 use crate::model::{PortStatus, ScanMode, ScanResult};
+
+fn assert_http_information(
+    header: Option<&str>,
+    product: Option<&str>,
+    version: Option<&str>,
+    comments: Option<&str>,
+) {
+    assert_eq!(
+        identify_http_server(header),
+        ServiceInformation {
+            transport: ScanMode::Tcp,
+            service: Some("http".into()),
+            product: product.map(str::to_string),
+            version: version.map(str::to_string),
+            observation: comments.map(str::to_string),
+        },
+        "unexpected HTTP identification for {header:?}"
+    );
+}
+
+#[test]
+fn missing_or_empty_http_server_header_keeps_http_identification() {
+    for header in [None, Some(""), Some("   "), Some("\t\r\n")] {
+        assert_http_information(header, None, None, None);
+    }
+}
+
+#[test]
+fn identifies_plain_http_products_and_trims_surrounding_whitespace() {
+    for (header, product) in [
+        ("Caddy", "Caddy"),
+        (" Caddy ", "Caddy"),
+        ("\tCaddy\t", "Caddy"),
+        ("Apache", "Apache"),
+        ("nginx", "nginx"),
+    ] {
+        assert_http_information(Some(header), Some(product), None, None);
+    }
+}
+
+#[test]
+fn extracts_http_product_and_version_without_comments() {
+    for (header, product, version) in [
+        ("Apache/2.4.68", "Apache", "2.4.68"),
+        (" nginx/1.26.2 ", "nginx", "1.26.2"),
+        ("Caddy/2.10.0", "Caddy", "2.10.0"),
+    ] {
+        assert_http_information(Some(header), Some(product), Some(version), None);
+    }
+}
+
+#[test]
+fn extracts_one_parenthesized_http_comment_with_or_without_a_version() {
+    for (header, product, version, comment) in [
+        (
+            "Apache/2.4.68 (Debian)",
+            "Apache",
+            Some("2.4.68"),
+            Some("Debian"),
+        ),
+        (
+            " Apache/2.4.68   ( Debian Linux ) ",
+            "Apache",
+            Some("2.4.68"),
+            Some("Debian Linux"),
+        ),
+        (
+            "nginx/1.26.2\t(Linux)",
+            "nginx",
+            Some("1.26.2"),
+            Some("Linux"),
+        ),
+        ("Caddy (example)", "Caddy", None, Some("example")),
+        ("Apache/2.4.68 ()", "Apache", Some("2.4.68"), None),
+    ] {
+        assert_http_information(Some(header), Some(product), version, comment);
+    }
+}
+
+#[test]
+fn unsupported_or_malformed_http_headers_keep_product_unknown() {
+    for header in [
+        "Apache httpd",
+        "Caddy\tserver",
+        "Caddy\nserver",
+        "Caddy/",
+        "/Caddy",
+        "/",
+        "Apache//2.4.68",
+        "Apache/2.4.68/extra",
+        "Apache /2.4.68",
+        "Apache/ 2.4.68",
+        "Apache/2.4.68\tother",
+        "Apache\u{a0}httpd",
+        "Apache/2.4.68\u{a0}other",
+        "Apache/2.4.68 (Debian",
+        "Apache/2.4.68 Debian)",
+        "Apache/2.4.68 (Debian) extra",
+        "Apache/2.4.68 (Debian) (Linux)",
+        "Apache/2.4.68 ((Debian))",
+        "Apache/2.4.68(Debian)",
+        "Apache/2.4.68\n(Debian)",
+        "Apache/2.4.68 (De\0bian)",
+        "Caddy\0server",
+    ] {
+        assert_http_information(Some(header), None, None, None);
+    }
+}
+
+#[test]
+fn passive_http_banner_keeps_protocol_without_guessing_a_product() {
+    let info = identify_service(b"HTTP/1.1 200 OK\r\n").unwrap();
+    assert_eq!(info.transport, ScanMode::Tcp);
+    assert_eq!(info.service.as_deref(), Some("http"));
+    assert!(info.product.is_none());
+    assert!(info.version.is_none());
+    assert!(info.observation.is_none());
+}
 
 #[test]
 fn extracts_openssh_software_version_and_distribution_comments() {

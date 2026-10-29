@@ -9,6 +9,8 @@ use reqwest::{
     redirect::Policy,
 };
 
+use super::identify;
+use crate::model::service_information::ServiceInformation;
 use crate::utils::banner::escape_bytes;
 
 /// Decide whether an open port is a candidate for a plain HTTP probe.
@@ -37,14 +39,19 @@ fn server_observation(server: Option<&HeaderValue>) -> Option<String> {
     })
 }
 
+fn response_information(server: Option<&HeaderValue>) -> (ServiceInformation, Option<String>) {
+    let information = identify::identify_http_server(server.and_then(|value| value.to_str().ok()));
+    (information, server_observation(server))
+}
+
 pub async fn probe(
     target: SocketAddr,
     timeout: Duration,
-) -> Result<Option<String>, reqwest::Error> {
+) -> Result<(ServiceInformation, Option<String>), reqwest::Error> {
     let client = client(timeout)?;
     let request = head_request(&client, target)?;
     let response = client.execute(request).await?;
-    Ok(server_observation(response.headers().get(SERVER)))
+    Ok(response_information(response.headers().get(SERVER)))
 }
 
 #[cfg(test)]

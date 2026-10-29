@@ -9,6 +9,8 @@ use tokio::net::TcpStream;
 use tokio::time::{Instant as Deadline, timeout_at};
 
 use super::{http, identify};
+use crate::mapper::service_information::apply_service_information;
+use crate::model::service_information::ServiceInformation;
 use crate::model::{PortStatus, ScanMode, ScanResult};
 
 pub(super) async fn scan_port(target: SocketAddr, timeout: Duration) -> ScanResult {
@@ -20,27 +22,26 @@ pub(super) async fn scan_port(target: SocketAddr, timeout: Duration) -> ScanResu
 
     let mut result = match connection {
         Ok(stream) => {
-            let (service, observation, banner) = if http::is_http_candidate(target.port()) {
-                drop(stream);
-                match http::probe(target, timeout).await {
-                    Ok(response) => (Some("http".to_string()), response, None),
-                    Err(error) => (None, Some(format!("HTTP probe failed: {error}")), None),
-                }
-            } else {
-                let (observation, banner) = read_banner(stream, timeout).await;
-                (None, Some(observation), banner)
-            };
-            ScanResult {
+            let mut result = ScanResult {
                 port: target.port(),
                 transport: ScanMode::Tcp,
                 status: PortStatus::Open,
-                service,
+                service: None,
                 elapsed,
                 error: None,
-                observation,
-                banner,
+                observation: None,
+                banner: None,
                 service_information: None,
+            };
+            if http::is_http_candidate(target.port()) {
+                drop(stream);
+                apply_http_probe_result(&mut result, http::probe(target, timeout).await);
+            } else {
+                let (observation, banner) = read_banner(stream, timeout).await;
+                result.observation = Some(observation);
+                result.banner = banner;
             }
+            result
         }
         Err(error) => {
             let status = match error.kind() {
@@ -63,6 +64,19 @@ pub(super) async fn scan_port(target: SocketAddr, timeout: Duration) -> ScanResu
     };
     identify::collect_banner(&mut result);
     result
+}
+
+fn apply_http_probe_result(
+    result: &mut ScanResult,
+    response: Result<(ServiceInformation, Option<String>), reqwest::Error>,
+) {
+    match response {
+        Ok((information, observation)) => {
+            apply_service_information(result, information);
+            result.observation = observation;
+        }
+        Err(error) => result.observation = Some(format!("HTTP probe failed: {error}")),
+    }
 }
 
 async fn read_banner(
