@@ -4,6 +4,9 @@ Version **0.5.1** adds automatic HTTP candidate probing and structured header
 identification in TCP connect scans. The IPv4 SYN pipeline introduced in 0.5.0
 continues to perform port discovery without application identification.
 
+Current development extends the same TCP connect identification path to HTTPS
+on ports 443 and 8443, without adding application probes to SYN mode.
+
 rmap is a Rust network scanner inspired by Nmap, with optional AI research into observed services, possible CVEs, and public exploit references. It scans selected ports concurrently through bounded Tokio tasks for each unique IPv4 target using TCP connect, raw TCP SYN, or empty UDP probes. Hosts are processed sequentially.
 
 ## Flow through the application
@@ -16,7 +19,7 @@ flowchart TD
     Pool --> TCP[tcp.rs: TCP connect and banner reads]
     Pool --> UDP[udp.rs: empty UDP probes]
     Pool --> SYN[syn module: raw SYN and validated reply loop]
-    TCP --> HTTP[http.rs: HEAD probe on open HTTP candidate ports]
+    TCP --> HTTP[http.rs: HEAD probes on open HTTP and HTTPS candidate ports]
     TCP --> Results[Structured ScanResult values]
     HTTP --> Results
     UDP --> Results
@@ -53,7 +56,7 @@ flowchart TD
 | `src/scan/worker.rs` | Schedule bounded async tasks on a shared Tokio runtime, report completions, and restore input order |
 | `src/scan/tcp.rs` | TCP connection attempts, status classification, bounded passive reads, and collected-banner identification |
 | `src/scan/identify.rs` | Parse supported SSH, HTTP, FTP and SMTP banners into service information |
-| `src/scan/http.rs` | HTTP candidate selection, bounded `HEAD` probe, and structured `Server` header extraction |
+| `src/scan/http.rs` | HTTP/HTTPS candidate and request selection, bounded `HEAD` probes, and structured `Server` header extraction |
 | `src/scan/udp.rs` | One empty UDP probe, receive timeout, and outcome classification |
 | `src/model/mod.rs` | Shared measured results, transport and status enums, and separate AI data |
 | `src/model/progress.rs` | Display selected port count, timeout and throttled completion progress on stderr |
@@ -120,13 +123,22 @@ Passive TCP banner reads continue across short reads until the newline, byte lim
 Passive identification tries SSH, HTTP, FTP, then SMTP. Passive parsers use `complete_lines` for CRLF-terminated lines; service identification uses `map_tcp_service` to construct its model. `starts_with_digit` supplies the shared version-prefix check. `collect_banner` applies identification through `apply_service_information`, preserving the port state, elapsed time, raw banner bytes, and read stop reason.
 
 TCP automatically selects a separate HTTP `HEAD` probe for confirmed-open ports
-80, 8000, 8080, and 8888. `http::response_information` passes the original `Server`
+80, 8000, 8080, and 8888, or an HTTPS probe for 443 and 8443. `probe_request`
+selects the scheme before execution. The probe records that scheme before moving
+the request into `client.execute`, and propagates errors before identification.
+`http::response_information` passes the original `Server`
 header to `identify_http_server` before making the escaped 64-byte console
 preview. The parser accepts one product or product/version, optionally followed
 by a simple parenthesized comment. `split_http_comment` separates the comment;
 `is_http_component` validates the product and version. Unsupported formats retain
-the HTTP label without guessing software fields. Missing or undecodable headers
+the protocol label without guessing software fields. Missing or undecodable headers
 also leave software fields unknown.
+
+After successful execution, `response_information` labels HTTPS based on the
+request scheme and keeps TCP as the transport. It is also the fixture boundary
+used by offline tests. Default certificate trust and name verification remain
+enabled; there is no TLS bypass or automatic plaintext fallback. These tests do
+not run TLS handshakes or establish live certificate-validation behavior.
 
 `http::probe` returns structured identification and the display observation.
 `tcp::apply_http_probe_result` applies that identification through the existing

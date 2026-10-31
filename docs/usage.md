@@ -1,7 +1,7 @@
 # Running rmap
 
-Version **0.5.1** automatically probes HTTP on confirmed-open TCP ports 80, 8000,
-8080, and 8888. Product, version, and a simple parenthesized comment from the
+The current source automatically probes HTTP on confirmed-open TCP ports 80, 8000,
+8080, and 8888, and HTTPS on ports 443 and 8443. Product, version, and a simple parenthesized comment from the
 `Server` header are stored separately. No extra identification flag is required.
 
 Build with stable Rust supporting edition 2024:
@@ -141,7 +141,7 @@ by `cargo build --release`.
 
 When `--ports` is omitted or its value contains a range, only confirmed `open` ports are printed in the measured table. UDP `open|filtered` rows are hidden. The report gives the number of open ports shown and total scanned, or says no open ports were found. This filters presentation only: all outcomes remain available for progress and bounded AI context. With an explicit list of individual ports, every selected outcome is displayed. A range in exclusions alone does not change this mode.
 
-TCP connects and then collects a passive banner, or automatically sends an HTTP `HEAD` probe on confirmed-open ports 80, 8000, 8080, and 8888. The port only selects a probe; a valid response supplies the HTTP service label. UDP sends an empty datagram; protocol-specific UDP requests and service identification are not implemented. A UDP timeout is reported as `open|filtered` because a listening service may ignore that datagram.
+TCP connects and then collects a passive banner, or automatically sends a `HEAD` probe using HTTP on confirmed-open ports 80, 8000, 8080, and 8888, or HTTPS on ports 443 and 8443. The port only selects a probe; a successful response supplies the `http` or `https` service label. UDP sends an empty datagram; protocol-specific UDP requests and service identification are not implemented. A UDP timeout is reported as `open|filtered` because a listening service may ignore that datagram.
 
 HTTP identification parses a single product or product/version and an optional
 parenthesized comment from the original `Server` header. For example,
@@ -149,9 +149,26 @@ parenthesized comment from the original `Server` header. For example,
 `Debian`; `Caddy` supplies a product without a version. These fields are stored
 in the scan result and available to optional AI context. The console keeps its
 escaped `Server:` preview. A valid response without a usable header still
-identifies HTTP. Unsupported or malformed header formats leave software fields
+identifies HTTP or HTTPS according to the executed request. Unsupported or malformed header formats leave software fields
 unknown; probe failure preserves the measured open state. Comments are advertised
-information, not confirmed OS identification. HTTPS probing remains separate work.
+information, not confirmed OS identification.
+
+HTTPS keeps certificate trust and name verification enabled. Since targets are
+numeric IP addresses, a certificate issued only for a hostname can cause a probe
+failure. Self-signed or expired certificates can also prevent identification.
+These failures do not change an established TCP `open` result or create an HTTPS
+service label. The scanner does not retry using plaintext HTTP or bypass TLS
+validation. TLS certificate metadata is not collected.
+
+For an authorized host, an explicit web-service scan can be run with:
+
+```bash
+rmap --tcp --target 192.0.2.21 --ports 80,443,8000,8080,8443,8888 --timeout-ms 1000
+```
+
+Replace the documentation address with your own authorized target. This command
+performs real probes; it was not run during offline validation. See
+[HTTPS identification](https-identification.md) for the tested scope and learning notes.
 
 Passive banner recognition supports SSH, HTTP, selected FTP greetings, and SMTP greetings. For SMTP, a complete CRLF-terminated `220 ` or `220-` greeting must contain an exact uppercase `SMTP` or `ESMTP` token. The service label becomes `smtp`, even without a known product. Separate `Postfix` and `Exim` tokens supply a product; an immediately following supported version token supplies the version. Unknown fields stay unset. Port numbers do not determine the service label.
 

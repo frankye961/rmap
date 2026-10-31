@@ -13,6 +13,8 @@ The earlier TCP scanner and banner grabbing are explained briefly for context.
 Version 0.5.1 adds automatic HTTP probing on TCP connect ports 80, 8000, 8080,
 and 8888, including structured product/version and simple comment parsing.
 That application identification is separate from the SYN scanner covered here.
+The current HTTP module also supports HTTPS candidates 443 and 8443; see
+[HTTPS identification](https-identification.md) for the request and result flow.
 
 ## Contents
 
@@ -1029,8 +1031,9 @@ Next validation and later work:
    and an example error; an empty table still does not prove all probes succeeded.
 5. Consider ICMP error interpretation and a bounded retransmission policy later;
    neither is included in this initial implementation. IPv6 SYN is also unsupported.
-6. Expand application probing (TLS, SMB, RPC/NFS) separately. Version 0.5.1
-   identifies HTTP on four candidate ports in TCP connect mode. SYN packets alone
+6. Expand application probing (SMB, RPC/NFS, and richer TLS evidence) separately.
+   TCP connect mode identifies HTTP on four candidate ports and now probes HTTPS
+   on 443 and 8443. SYN packets alone
    do not provide application banners or software versions.
 
 Measured results remain independent of optional AI interpretation. Service hints,
