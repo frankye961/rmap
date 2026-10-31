@@ -57,29 +57,55 @@ fn http_identification_reaches_scan_results_without_changing_measurements() {
 }
 
 #[test]
+fn https_probe_information_reaches_results_without_changing_measured_state() {
+    let header = reqwest::header::HeaderValue::from_static("Apache/2.4.68 (Debian)");
+    for port in [443, 8443] {
+        for server in [None, Some(&header)] {
+            let mut result = measured_open_http_port(port);
+            let (information, detail) = super::http::response_information(server, true);
+            let expected_information = information.clone();
+            apply_http_probe_result(&mut result, Ok((information, detail.clone())));
+            super::identify::collect_banner(&mut result);
+
+            assert_eq!(result.service.as_deref(), Some("https"));
+            assert_eq!(
+                result.service_information.as_ref(),
+                Some(&expected_information)
+            );
+            assert_eq!(result.observation, detail);
+            assert_eq!(result.port, port);
+            assert_eq!(result.transport, ScanMode::Tcp);
+            assert_eq!(result.status, PortStatus::Open);
+            assert_eq!(result.elapsed, Duration::from_millis(17));
+            assert!(result.error.is_none());
+            assert!(result.banner.is_none());
+        }
+    }
+}
+
+#[test]
 fn http_probe_failure_preserves_the_open_port_without_inventing_a_service() {
-    let error = reqwest::Client::builder()
-        .no_proxy()
-        .build()
-        .unwrap()
-        .head("://")
-        .build()
-        .unwrap_err();
-    let mut result = measured_open_http_port(8000);
-    apply_http_probe_result(&mut result, Err(error));
-    assert_eq!(result.status, PortStatus::Open);
-    assert_eq!(result.port, 8000);
-    assert_eq!(result.elapsed, Duration::from_millis(17));
-    assert!(result.service.is_none());
-    assert!(result.service_information.is_none());
-    assert!(result.error.is_none());
-    assert!(
-        result
-            .observation
-            .as_deref()
-            .unwrap()
-            .starts_with("HTTP probe failed: ")
-    );
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    for port in [8000, 443, 8443] {
+        // A deterministic request-building error exercises the shared failure path.
+        // It does not claim to reproduce a TLS handshake or certificate failure.
+        let error = client.head("://").build().unwrap_err();
+        let mut result = measured_open_http_port(port);
+        apply_http_probe_result(&mut result, Err(error));
+        assert_eq!(result.status, PortStatus::Open);
+        assert_eq!(result.port, port);
+        assert_eq!(result.elapsed, Duration::from_millis(17));
+        assert!(result.service.is_none());
+        assert!(result.service_information.is_none());
+        assert!(result.error.is_none());
+        assert!(
+            result
+                .observation
+                .as_deref()
+                .unwrap()
+                .starts_with("HTTP probe failed: ")
+        );
+    }
 }
 
 // In-memory scripted reader; no socket or network calls are needed.
