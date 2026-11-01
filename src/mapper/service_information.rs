@@ -22,3 +22,13 @@ pub fn apply_service_information(result: &mut ScanResult, information: ServiceIn
     result.service = information.service.clone();
     result.service_information = Some(information);
 }
+
+/// Map a validated portmapper v2 NULL reply without inventing software identity.
+pub fn map_portmapper_service() -> ServiceInformation {
+    map_tcp_service(
+        "rpcbind",
+        None,
+        None,
+        Some("RPC program 100000; portmapper protocol version 2; NULL procedure succeeded"),
+    )
+}

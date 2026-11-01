@@ -4,6 +4,10 @@ The current source automatically probes HTTP on confirmed-open TCP ports 80, 800
 8080, and 8888, and HTTPS on ports 443 and 8443. Product, version, and a simple parenthesized comment from the
 `Server` header are stored separately. No extra identification flag is required.
 
+RPC candidate, validation, mapping, and result-handling helpers are available
+for offline development. They do not yet send RPC probes during CLI scans;
+port 111 retains passive banner reads. See [RPC learning notes](rpc-identification.md).
+
 Build with stable Rust supporting edition 2024:
 
 ```bash

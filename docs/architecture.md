@@ -57,6 +57,7 @@ flowchart TD
 | `src/scan/tcp.rs` | TCP connection attempts, status classification, bounded passive reads, and collected-banner identification |
 | `src/scan/identify.rs` | Parse supported SSH, HTTP, FTP and SMTP banners into service information |
 | `src/scan/http.rs` | HTTP/HTTPS candidate and request selection, bounded `HEAD` probes, and structured `Server` header extraction |
+| `src/scan/rpc.rs` | In-memory RPC request/framing helpers, reply validation, TCP candidate selection, and validated-response mapping; no network exchange yet |
 | `src/scan/udp.rs` | One empty UDP probe, receive timeout, and outcome classification |
 | `src/model/mod.rs` | Shared measured results, transport and status enums, and separate AI data |
 | `src/model/progress.rs` | Display selected port count, timeout and throttled completion progress on stderr |
@@ -145,6 +146,24 @@ not run TLS handshakes or establish live certificate-validation behavior.
 mapper and stores the observation, preserving the measured state and connection
 time. Probe errors become observations on the already-open result. This flow
 does not add application probing to SYN mode or infer an OS from comments.
+
+RPC has a separate completed-response integration boundary. `is_rpc_candidate`
+selects TCP port 111 as an initial hint. `response_information` validates a fully
+reassembled reply body against the original XID, then calls
+`map_portmapper_service` in the existing service mapper. The resulting `rpcbind`
+label records program 100000, protocol version 2, and NULL procedure success as
+observations. Product and software version remain unknown.
+
+`tcp::apply_rpc_probe_result` accepts a completed exchange result only for an
+open TCP-connect candidate. Successful identification uses
+`apply_service_information`; diagnostics are appended to existing observations.
+Connection state, elapsed time, socket error, and passive bytes are preserved.
+Failure also retains any previous service identification. Tests supply fixture
+replies and exchange errors at this boundary; they do not open sockets.
+The handler is not called from `scan_port` yet: TCP record decoding, bounded
+fragment reading, and the actual network exchange remain unimplemented. Normal
+scans retain their current passive behavior on port 111. See
+[RPC learning notes](rpc-identification.md) for the remaining work.
 
 The SMTP parser first checks for an exact uppercase `SMTP` or `ESMTP` whitespace token, then requires a `220 ` or `220-` greeting prefix. It searches the remaining tokens for `Postfix` or `Exim`; the immediately following token is retained as a version only when it starts with an ASCII digit and contains ASCII alphanumeric characters, dots, hyphens, or underscores. Product and version are optional, so an unknown implementation still receives an `smtp` label. The same logic applies on nonstandard ports and is covered by in-memory fixtures.
 

@@ -8,7 +8,7 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::net::TcpStream;
 use tokio::time::{Instant as Deadline, timeout_at};
 
-use super::{http, identify};
+use super::{http, identify, rpc};
 use crate::mapper::service_information::apply_service_information;
 use crate::model::service_information::ServiceInformation;
 use crate::model::{PortStatus, ScanMode, ScanResult};
@@ -76,6 +76,45 @@ fn apply_http_probe_result(
             result.observation = observation;
         }
         Err(error) => result.observation = Some(format!("HTTP probe failed: {error}")),
+    }
+}
+
+/// Apply a completed RPC exchange without changing measured connection evidence.
+/// The network probe will call this once TCP record reading is implemented.
+#[allow(dead_code)] // Integration boundary; no RPC network exchange is implemented yet.
+fn apply_rpc_probe_result(
+    _result: &mut ScanResult,
+    _response: Result<&[u8], String>,
+    _expected_xid: u32,
+) {
+    if _result.transport != ScanMode::Tcp
+        || _result.status != PortStatus::Open
+        || !rpc::is_rpc_candidate(_result.port)
+    {
+        return;
+    }
+
+    let _detail =
+        match _response.and_then(|_reply| rpc::response_information(_reply, _expected_xid)) {
+            Ok(_information) => {
+                let _detail = _information.observation.clone();
+                apply_service_information(_result, _information);
+                _detail
+            }
+            Err(_error) => Some(format!("RPC probe failed: {_error}")),
+        };
+    if let Some(_detail) = _detail {
+        match _result
+            .observation
+            .as_mut()
+            .filter(|_text| !_text.is_empty())
+        {
+            Some(_existing) => {
+                _existing.push_str("; ");
+                _existing.push_str(&_detail);
+            }
+            None => _result.observation = Some(_detail),
+        }
     }
 }
 

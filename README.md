@@ -32,10 +32,30 @@ scanning an IP address with a certificate issued for a hostname. Probe failure
 preserves the open-port measurement. There is no certificate bypass, automatic
 plaintext fallback, or TLS certificate inventory in this implementation.
 
-The current suite has 140 passing offline tests, including HTTPS request
-selection, response labels, and scan-result integration. Real TLS handshakes,
+The HTTPS extension added six offline tests covering request selection, response
+labels, and scan-result integration. Real TLS handshakes,
 certificate failures, and live HTTPS servers have not been validated here.
 See [HTTPS identification and learning notes](docs/https-identification.md).
+
+## Current development: RPC identification helpers
+
+RPC work now includes request encoding, TCP record construction, NULL-reply
+validation, and candidate selection for TCP port 111. A completed, validated
+portmapper v2 NULL reply maps to `rpcbind` using the existing service mapper.
+The observation records program 100000 and protocol version 2; software product
+and version remain unknown. A port number alone never establishes this identity.
+
+The TCP result handler accepts completed exchange results, retains connection
+measurements and passive banner bytes, and appends RPC diagnostics without
+discarding existing observations. Probe failures preserve the open state and
+any earlier service identification. Offline tests cover this path and console
+formatting.
+
+**RPC network probing is not active yet.** TCP record decoding, bounded fragment
+collection, and the send/receive exchange are the remaining learning exercises.
+The handler is prepared for that future call; normal TCP scans still use passive
+reads on port 111. No new flag, dependency, or live RPC validation was added.
+See [RPC identification and learning notes](docs/rpc-identification.md).
 
 ## Version 0.5.0 milestone: TCP SYN scanning
 
@@ -563,6 +583,7 @@ src/
 │   ├── tcp.rs          TCP connections, outcomes, and passive banners
 │   ├── identify.rs     SSH, HTTP, FTP, and SMTP banner identification
 │   ├── udp.rs          UDP probes and outcome classification
+│   ├── rpc.rs          RPC byte helpers, reply validation, and candidate selection
 │   └── http.rs         HTTP/HTTPS candidates, HEAD probes, and header extraction
 ├── model/
 │   ├── mod.rs          Scan results, preserved banner bytes, and AI data
