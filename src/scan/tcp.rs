@@ -33,7 +33,7 @@ pub(super) async fn scan_port(target: SocketAddr, timeout: Duration) -> ScanResu
                 banner: None,
                 service_information: None,
             };
-            if http::is_http_candidate(target.port()) {
+            if http::is_http_candidate(target.port()) || http::is_https_candidate(target.port()) {
                 drop(stream);
                 apply_http_probe_result(&mut result, http::probe(target, timeout).await);
             } else {
