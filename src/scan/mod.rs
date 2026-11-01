@@ -8,6 +8,7 @@ use crate::model::{MAX_CONCURRENCY, ScanMode, ScanResult};
 mod http;
 mod identify;
 mod resources;
+mod rpc;
 mod syn;
 mod tcp;
 mod udp;
