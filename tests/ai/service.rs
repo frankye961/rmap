@@ -40,6 +40,7 @@ fn udp_observations_keep_their_transport() {
         observation: Some("response".into()),
         banner: None,
         service_information: None,
+        rpc_mappings: None,
     };
     let prompt = super::build_prompt(&[result], &[]);
     assert!(prompt.contains("53/udp"));
@@ -63,6 +64,7 @@ fn closed_and_uncertain_ports_are_still_measured_observations() {
             observation: Some("probe outcome".into()),
             banner: None,
             service_information: None,
+            rpc_mappings: None,
         })
         .collect();
     let prompt = super::build_prompt(&results, &[]);
@@ -88,6 +90,7 @@ fn research_reads_banner_beyond_console_preview_and_keeps_stop_reason() {
         observation: Some("read timed out".into()),
         banner: Some(bytes),
         service_information: None,
+        rpc_mappings: None,
     };
     let prompt = super::build_prompt(&[result], &[]);
     assert!(prompt.contains("vsFTPd 3.0.5"));
@@ -110,6 +113,7 @@ fn includes_structured_ssh_software_and_version_in_research_context() {
         error: None,
         observation: Some("peer closed connection".into()),
         banner: Some(b"SSH-2.0-OpenSSH_10.0p2 Debian-7+deb13u4\r\n".to_vec()),
+        rpc_mappings: None,
         service_information: Some(map_tcp_service(
             "ssh",
             Some("OpenSSH"),

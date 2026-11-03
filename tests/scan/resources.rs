@@ -101,6 +101,7 @@ async fn a_reduced_budget_still_schedules_every_port_in_a_full_scan() {
                     observation: None,
                     banner: None,
                     service_information: None,
+                    rpc_mappings: None,
                 }
             }
         },

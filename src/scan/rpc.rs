@@ -1,14 +1,18 @@
 use std::net::SocketAddr;
 
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::Instant;
 
 use crate::mapper::service_information::map_portmapper_service;
+use crate::model::rpc::RpcMapping;
 use crate::model::service_information::ServiceInformation;
 
 /// Bound the assembled reply; protocol version 2 NULL replies need far less space.
 pub(super) const MAX_REPLY_BYTES: usize = 4096;
+
+/// Bound the number of advertised registrations independently of the byte limit.
+pub(super) const MAX_DUMP_ENTRIES: usize = 128;
 
 /// Select an initial TCP probe candidate; the port alone does not identify RPC.
 pub(super) fn is_rpc_candidate(_port: u16) -> bool {
@@ -24,8 +28,28 @@ pub(super) async fn probe(
     _max_bytes: usize,
 ) -> Result<Vec<u8>, String> {
     let _null_call = build_portmapper_null_call(_xid);
-    let _call = frame_rpc_record(&_null_call)?;
+    exchange_rpc_call(_target, &_null_call, _deadline, _max_bytes).await
+}
 
+/// Exchange a DUMP request; the caller validates and parses its list payload.
+pub(super) async fn probe_dump(
+    _target: SocketAddr,
+    _xid: u32,
+    _deadline: Instant,
+    _max_bytes: usize,
+) -> Result<Vec<u8>, String> {
+    let _dump_call = build_portmapper_dump_call(_xid);
+    exchange_rpc_call(_target, &_dump_call, _deadline, _max_bytes).await
+}
+
+/// Connect once for either procedure, sharing the same deadline with stream I/O.
+async fn exchange_rpc_call(
+    _target: SocketAddr,
+    _message: &[u8],
+    _deadline: Instant,
+    _max_bytes: usize,
+) -> Result<Vec<u8>, String> {
+    let _frame = frame_rpc_record(_message)?;
     if Instant::now() >= _deadline {
         return Err("RPC connection timed out".into());
     }
@@ -34,15 +58,25 @@ pub(super) async fn probe(
         .map_err(|_| "RPC connection timed out".to_string())?
         .map_err(|_error| format!("RPC connection failed: {_error}"))?;
 
+    exchange_rpc_stream(&mut _connection, &_frame, _deadline, _max_bytes).await
+}
+
+/// Reuse the request/response sequence with a TCP stream or in-memory test stream.
+async fn exchange_rpc_stream(
+    _connection: &mut (impl AsyncRead + AsyncWrite + Unpin),
+    _frame: &[u8],
+    _deadline: Instant,
+    _max_bytes: usize,
+) -> Result<Vec<u8>, String> {
     if Instant::now() >= _deadline {
         return Err("RPC request writing timed out".into());
     }
-    tokio::time::timeout_at(_deadline, _connection.write_all(&_call))
+    tokio::time::timeout_at(_deadline, _connection.write_all(_frame))
         .await
         .map_err(|_| "RPC request writing timed out".to_string())?
         .map_err(|_error| format!("Failed to write RPC request: {_error}"))?;
 
-    let _reply = read_rpc_record(&mut _connection, _deadline, _max_bytes)
+    let _reply = read_rpc_record(_connection, _deadline, _max_bytes)
         .await
         .map_err(|_error| format!("Failed to read RPC record: {_error}"))?;
 
@@ -67,18 +101,27 @@ pub(super) fn append_u32(_buffer: &mut Vec<u8>, _value: u32) {
 
 /// Build a 40-byte portmapper v2 NULL call with AUTH_NONE and no TCP framing.
 pub(super) fn build_portmapper_null_call(_xid: u32) -> Vec<u8> {
-    let mut _empty_byte = Vec::new();
-    append_u32(&mut _empty_byte, _xid);
-    append_u32(&mut _empty_byte, 0);
-    append_u32(&mut _empty_byte, 2);
-    append_u32(&mut _empty_byte, 100000);
-    append_u32(&mut _empty_byte, 2);
-    append_u32(&mut _empty_byte, 0);
-    append_u32(&mut _empty_byte, 0);
-    append_u32(&mut _empty_byte, 0);
-    append_u32(&mut _empty_byte, 0);
-    append_u32(&mut _empty_byte, 0);
-    _empty_byte
+    build_portmapper_call(_xid, 0)
+}
+
+/// Build a portmapper v2 DUMP call with AUTH_NONE, without a TCP record marker.
+fn build_portmapper_dump_call(_xid: u32) -> Vec<u8> {
+    build_portmapper_call(_xid, 4)
+}
+
+/// Encode the common ten-field header for procedures with no arguments.
+fn build_portmapper_call(_xid: u32, _procedure: u32) -> Vec<u8> {
+    let mut _call = Vec::with_capacity(40);
+    for _field in [
+        _xid, 0, // CALL.
+        2, // RPC protocol version.
+        100000, 2, // Portmapper program version.
+        _procedure, 0, 0, // Empty AUTH_NONE credentials.
+        0, 0, // Empty AUTH_NONE verifier.
+    ] {
+        append_u32(&mut _call, _field);
+    }
+    _call
 }
 
 /// Build a final-fragment marker after checking the 31-bit length limit.
@@ -181,6 +224,31 @@ fn read_u32(_data: &[u8], _offset: &mut usize) -> Option<u32> {
     Some(_value)
 }
 
+/// Read one 16-byte mapping, advancing the caller's cursor only on success.
+fn read_rpc_mapping(_data: &[u8], _offset: &mut usize) -> Result<RpcMapping, String> {
+    let mut _cursor = *_offset;
+    let _program = read_u32(_data, &mut _cursor)
+        .ok_or_else(|| "Incomplete RPC program number: expected 4 bytes".to_string())?;
+    let _version = read_u32(_data, &mut _cursor)
+        .ok_or_else(|| "Incomplete RPC program version: expected 4 bytes".to_string())?;
+    let _protocol = read_u32(_data, &mut _cursor)
+        .ok_or_else(|| "Incomplete RPC protocol number: expected 4 bytes".to_string())?;
+    let _port = read_u32(_data, &mut _cursor)
+        .ok_or_else(|| "Incomplete RPC port number: expected 4 bytes".to_string())?;
+    if _port == 0 || _port > 65535 {
+        return Err(format!("RPC port number {_port} is out of range 1..=65535"));
+    }
+
+    let _mapping = RpcMapping {
+        program: _program,
+        program_version: _version,
+        protocol: _protocol,
+        port: _port,
+    };
+    *_offset = _cursor;
+    Ok(_mapping)
+}
+
 /// Validate the transaction ID, REPLY message type, and MSG_ACCEPTED reply status.
 /// Input excludes the TCP record marker. Return the cursor after these three fields.
 /// An accepted reply still needs its verifier and procedure status checked later.
@@ -251,23 +319,61 @@ fn skip_rpc_verifier(_data: &[u8], _offset: usize) -> Result<usize, String> {
     Ok(_padding_end)
 }
 
-/// Validate one complete portmapper NULL reply body, without a TCP record marker.
-fn validate_portmapper_null_reply(_data: &[u8], _expected_xid: u32) -> Result<(), String> {
+/// Validate the common successful reply envelope and return its result-body offset.
+fn validate_rpc_success_reply(_data: &[u8], _expected_xid: u32) -> Result<usize, String> {
     let mut _cursor = validate_rpc_reply_header(_data, _expected_xid)?;
     _cursor = skip_rpc_verifier(_data, _cursor)?;
     let accept_stat = read_u32(_data, &mut _cursor)
         .ok_or_else(|| "Incomplete RPC procedure status: expected 4 bytes".to_string())?;
     if accept_stat != 0 {
         return Err(format!(
-            "RPC NULL procedure did not succeed: received accept status {accept_stat}"
+            "RPC procedure did not succeed: received accept status {accept_stat}"
         ));
     }
 
+    Ok(_cursor)
+}
+
+/// Validate one complete portmapper NULL reply body, without a TCP record marker.
+fn validate_portmapper_null_reply(_data: &[u8], _expected_xid: u32) -> Result<(), String> {
+    let _cursor = validate_rpc_success_reply(_data, _expected_xid)?;
     if _cursor != _data.len() {
         return Err("Unexpected bytes after RPC NULL reply".into());
     }
 
     Ok(())
+}
+
+/// Parse a complete successful DUMP reply into advertised registrations.
+pub(super) fn parse_portmapper_dump_reply(
+    _data: &[u8],
+    _expected_xid: u32,
+    _max_entries: usize,
+) -> Result<Vec<RpcMapping>, String> {
+    let _cursor = validate_rpc_success_reply(_data, _expected_xid)?;
+    let mut _mut_cursor = _cursor;
+    let mut _mappings = Vec::new();
+    loop {
+        let _list_marker = read_u32(_data, &mut _mut_cursor)
+            .ok_or_else(|| "Incomplete RPC list marker: expected 4 bytes".to_string())?;
+        if _list_marker == 0 {
+            if _mut_cursor != _data.len() {
+                return Err("Unexpected bytes after RPC DUMP list".into());
+            }
+            return Ok(_mappings);
+        } else if _list_marker != 1 {
+            return Err(format!(
+                "Unexpected RPC list marker {_list_marker}: expected 0 or 1"
+            ));
+        }
+        if _mappings.len() >= _max_entries {
+            return Err(format!(
+                "RPC DUMP reply exceeded maximum of {_max_entries} entries"
+            ));
+        }
+        let _mapping = read_rpc_mapping(_data, &mut _mut_cursor)?;
+        _mappings.push(_mapping);
+    }
 }
 
 #[cfg(test)]

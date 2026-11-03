@@ -24,6 +24,7 @@ fn result(target: SocketAddr) -> ScanResult {
         observation: None,
         banner: None,
         service_information: None,
+        rpc_mappings: None,
     }
 }
 

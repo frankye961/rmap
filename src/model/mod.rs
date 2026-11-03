@@ -2,9 +2,11 @@
 
 pub mod progress;
 pub mod report;
+pub mod rpc;
 pub mod service_information;
 pub mod syn;
 
+use self::rpc::RpcMapping;
 use self::service_information::ServiceInformation;
 use std::time::Duration;
 
@@ -47,6 +49,9 @@ pub struct ScanResult {
     pub observation: Option<String>,
     pub banner: Option<Vec<u8>>,
     pub service_information: Option<ServiceInformation>,
+    /// Advertised registrations, separate from measured port states.
+    /// None means no successful enumeration; Some(empty) means an empty DUMP result.
+    pub rpc_mappings: Option<Vec<RpcMapping>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

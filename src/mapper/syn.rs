@@ -24,5 +24,6 @@ pub fn map_syn_result(
         observation: _observation,
         banner: None,
         service_information: None,
+        rpc_mappings: None,
     }
 }

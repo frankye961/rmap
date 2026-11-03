@@ -16,6 +16,7 @@ fn displays_mapped_rpc_information_without_a_fabricated_software_version() {
         observation: information.observation.clone(),
         banner: None,
         service_information: None,
+        rpc_mappings: None,
     };
     crate::mapper::service_information::apply_service_information(&mut result, information);
     let line = format_result(&result);
@@ -58,6 +59,7 @@ fn reports_transport_uncertainty_and_elapsed_time() {
         observation: Some("no response".into()),
         banner: None,
         service_information: None,
+        rpc_mappings: None,
     };
     let line = format_result(&result);
     assert!(line.starts_with("53/udp"));
@@ -84,6 +86,7 @@ fn shows_safe_banner_preview_and_preserves_full_bytes_and_stop_reason() {
         observation: Some("read timed out".into()),
         banner: Some(bytes.clone()),
         service_information: None,
+        rpc_mappings: None,
     };
     let line = format_result(&result);
     assert!(line.contains("\\x1bSSH-2.0-"));
@@ -104,6 +107,7 @@ fn strips_banner_line_ending_without_quotes_or_empty_reason() {
         observation: Some(String::new()),
         banner: Some(b"SSH-2.0-OpenSSH_10.0\r\n".to_vec()),
         service_information: None,
+        rpc_mappings: None,
     };
     assert!(format_result(&result).ends_with("SSH-2.0-OpenSSH_10.0"));
 }
@@ -128,8 +132,79 @@ fn measured_results() -> Vec<ScanResult> {
         observation: None,
         banner: None,
         service_information: None,
+        rpc_mappings: None,
     })
     .collect()
+}
+
+#[test]
+fn advertised_mapping_table_does_not_add_measured_open_ports() {
+    let mut results = measured_results();
+    results[0].port = 111;
+    results[0].transport = ScanMode::Tcp;
+    results[0].service = Some("rpcbind".into());
+    results[0].rpc_mappings = Some(vec![
+        crate::model::rpc::RpcMapping {
+            program: 100000,
+            program_version: 2,
+            protocol: 6,
+            port: 111,
+        },
+        crate::model::rpc::RpcMapping {
+            program: 100000,
+            program_version: 2,
+            protocol: 17,
+            port: 111,
+        },
+        crate::model::rpc::RpcMapping {
+            program: 100123,
+            program_version: 7,
+            protocol: 250,
+            port: 2049,
+        },
+    ]);
+    let mut output = Vec::new();
+    super::write_results(&mut output, "192.0.2.21", &results, true).unwrap();
+    let output = String::from_utf8(output).unwrap();
+    assert!(output.contains("RPC registrations advertised by 111/tcp"));
+    assert!(output.contains("connectivity has not been tested by enumeration"));
+    assert!(output.contains("PROGRAM"));
+    assert!(output.contains("TRANSPORT"));
+    for value in ["100000", "100123", "TCP", "UDP", "IP(250)", "2049"] {
+        assert!(output.contains(value));
+    }
+    assert!(output.contains("Open ports shown: 1; ports scanned: 5."));
+    assert!(!output.contains("2049/tcp"));
+    assert_eq!(results.len(), 5);
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| result.status == PortStatus::Open)
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn report_distinguishes_an_empty_dump_from_no_successful_enumeration() {
+    let mut results = measured_results();
+    results[0].port = 111;
+    results[0].transport = ScanMode::Tcp;
+    results[0].service = Some("rpcbind".into());
+    let mut output = Vec::new();
+    super::write_results(&mut output, "192.0.2.21", &results, false).unwrap();
+    assert!(
+        !String::from_utf8(output)
+            .unwrap()
+            .contains("RPC registrations")
+    );
+
+    results[0].rpc_mappings = Some(Vec::new());
+    let mut output = Vec::new();
+    super::write_results(&mut output, "192.0.2.21", &results, false).unwrap();
+    let output = String::from_utf8(output).unwrap();
+    assert!(output.contains("RPC registrations advertised by 111/tcp"));
+    assert!(output.contains("No registrations advertised."));
 }
 
 #[test]

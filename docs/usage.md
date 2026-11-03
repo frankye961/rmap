@@ -6,10 +6,15 @@ The current source automatically probes HTTP on confirmed-open TCP ports 80, 800
 
 Confirmed-open TCP port 111 automatically receives a portmapper v2 NULL probe.
 A validated successful reply supplies the `rpcbind` label and protocol details;
-software product and version remain unknown. No extra flag is required. The
-RPC exchange shares one `--timeout-ms` deadline across connect/write/read and
-limits the assembled reply to 4096 bytes. Identification failure leaves the
-initial open-port result intact. UDP and SYN modes do not perform this probe.
+software product and version remain unknown. Successful identification is followed
+by a portmapper DUMP request and a separate advertised-registration table.
+No extra flag is required. Each NULL/DUMP exchange has its own `--timeout-ms`
+budget shared across connect/write/read and a 4096-byte reply limit. DUMP also
+limits the list to 128 entries. The two RPC exchanges run sequentially after
+the initial TCP measurement, so total identification may use two timeout budgets.
+Enumeration failure preserves `rpcbind` and the initial open-port result. Listed
+endpoints are not automatically probed or counted as measured open ports.
+UDP and SYN modes do not perform these probes.
 See [RPC learning notes](rpc-identification.md).
 
 Example command for a lab host you are authorized to assess:

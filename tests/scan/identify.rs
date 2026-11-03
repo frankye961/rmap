@@ -179,6 +179,7 @@ fn identifies_nonstandard_port_without_changing_scan_measurements() {
         observation: Some("peer closed connection".into()),
         banner: Some(bytes.clone()),
         service_information: None,
+        rpc_mappings: None,
     };
     collect_banner(&mut result);
     assert_eq!(result.service.as_deref(), Some("ssh"));
@@ -336,6 +337,7 @@ fn smtp_collection_on_nonstandard_port_preserves_scan_measurements() {
         observation: Some("peer closed connection".into()),
         banner: Some(bytes.clone()),
         service_information: None,
+        rpc_mappings: None,
     };
     collect_banner(&mut result);
     assert_eq!(result.service.as_deref(), Some("smtp"));

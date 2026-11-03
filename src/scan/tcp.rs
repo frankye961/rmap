@@ -11,6 +11,7 @@ use tokio::time::{Instant as Deadline, timeout_at};
 
 use super::{http, identify, rpc};
 use crate::mapper::service_information::apply_service_information;
+use crate::model::rpc::RpcMapping;
 use crate::model::service_information::ServiceInformation;
 use crate::model::{PortStatus, ScanMode, ScanResult};
 
@@ -33,6 +34,7 @@ pub(super) async fn scan_port(target: SocketAddr, timeout: Duration) -> ScanResu
                 observation: None,
                 banner: None,
                 service_information: None,
+                rpc_mappings: None,
             };
             if http::is_http_candidate(target.port()) || http::is_https_candidate(target.port()) {
                 drop(stream);
@@ -42,6 +44,10 @@ pub(super) async fn scan_port(target: SocketAddr, timeout: Duration) -> ScanResu
                 drop(stream);
                 collect_rpc(&mut result, timeout, |_xid, _deadline, _limit| {
                     rpc::probe(target, _xid, _deadline, _limit)
+                })
+                .await;
+                collect_rpc_dump(&mut result, timeout, |_xid, _deadline, _limit| {
+                    rpc::probe_dump(target, _xid, _deadline, _limit)
                 })
                 .await;
             } else {
@@ -67,6 +73,7 @@ pub(super) async fn scan_port(target: SocketAddr, timeout: Duration) -> ScanResu
                 observation: None,
                 banner: None,
                 service_information: None,
+                rpc_mappings: None,
             }
         }
     };
@@ -99,20 +106,50 @@ where
     {
         return;
     }
-    let _deadline = Deadline::now() + _timeout;
-    let _xid = match getrandom::u32() {
-        Ok(_xid) => _xid,
+    match run_rpc_exchange(_timeout, _probe).await {
+        Ok((_xid, _reply)) => apply_rpc_probe_result(_result, Ok(&_reply), _xid),
         Err(_error) => {
             apply_rpc_probe_result(
                 _result,
-                Err(format!("Failed to generate RPC transaction ID: {_error}")),
+                Err(_error),
                 0, // No response is validated on this error path.
             );
-            return;
         }
-    };
-    let _response = _probe(_xid, _deadline, rpc::MAX_REPLY_BYTES).await;
-    apply_rpc_probe_result(_result, _response.as_deref().map_err(String::clone), _xid);
+    }
+}
+
+/// Enumerate only after NULL has identified portmapper; keep identification on failure.
+async fn collect_rpc_dump<F, Fut>(_result: &mut ScanResult, _timeout: Duration, _probe: F)
+where
+    F: FnOnce(u32, Deadline, usize) -> Fut,
+    Fut: Future<Output = Result<Vec<u8>, String>>,
+{
+    if _result.transport != ScanMode::Tcp
+        || _result.status != PortStatus::Open
+        || !rpc::is_rpc_candidate(_result.port)
+        || _result.service.as_deref() != Some("rpcbind")
+    {
+        return;
+    }
+    let _response = run_rpc_exchange(_timeout, _probe)
+        .await
+        .and_then(|(_xid, _reply)| {
+            rpc::parse_portmapper_dump_reply(&_reply, _xid, rpc::MAX_DUMP_ENTRIES)
+        });
+    apply_rpc_dump_result(_result, _response);
+}
+
+/// Share XID generation and per-exchange bounds between NULL and DUMP.
+async fn run_rpc_exchange<F, Fut>(_timeout: Duration, _probe: F) -> Result<(u32, Vec<u8>), String>
+where
+    F: FnOnce(u32, Deadline, usize) -> Fut,
+    Fut: Future<Output = Result<Vec<u8>, String>>,
+{
+    let _deadline = Deadline::now() + _timeout;
+    let _xid = getrandom::u32()
+        .map_err(|_error| format!("Failed to generate RPC transaction ID: {_error}"))?;
+    let _reply = _probe(_xid, _deadline, rpc::MAX_REPLY_BYTES).await?;
+    Ok((_xid, _reply))
 }
 
 /// Apply a completed RPC exchange without changing measured connection evidence.
@@ -138,17 +175,36 @@ fn apply_rpc_probe_result(
             Err(_error) => Some(format!("RPC probe failed: {_error}")),
         };
     if let Some(_detail) = _detail {
-        match _result
-            .observation
-            .as_mut()
-            .filter(|_text| !_text.is_empty())
-        {
-            Some(_existing) => {
-                _existing.push_str("; ");
-                _existing.push_str(&_detail);
-            }
-            None => _result.observation = Some(_detail),
+        append_observation(_result, &_detail);
+    }
+}
+
+/// Apply a completed list parse without replacing NULL identification or measurements.
+fn apply_rpc_dump_result(_result: &mut ScanResult, _response: Result<Vec<RpcMapping>, String>) {
+    if _result.transport != ScanMode::Tcp
+        || _result.status != PortStatus::Open
+        || !rpc::is_rpc_candidate(_result.port)
+        || _result.service.as_deref() != Some("rpcbind")
+    {
+        return;
+    }
+    match _response {
+        Ok(_mappings) => _result.rpc_mappings = Some(_mappings),
+        Err(_error) => append_observation(_result, &format!("RPC enumeration failed: {_error}")),
+    }
+}
+
+fn append_observation(_result: &mut ScanResult, _detail: &str) {
+    match _result
+        .observation
+        .as_mut()
+        .filter(|_text| !_text.is_empty())
+    {
+        Some(_existing) => {
+            _existing.push_str("; ");
+            _existing.push_str(_detail);
         }
+        None => _result.observation = Some(_detail.to_string()),
     }
 }
 
