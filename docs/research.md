@@ -12,9 +12,10 @@ an open port nor an AI-generated CVE candidate establishes exploitability.
 
 ## Current experimental foundation
 
-Version 0.5.2 provides TCP connect, UDP, and Linux IPv4 SYN scanning; bounded
+Version 0.5.3 provides TCP connect, UDP, and Linux IPv4 SYN scanning; bounded
 concurrent scheduling; passive banner recognition; HTTP/HTTPS probes; and TCP
-portmapper v2 NULL identification. Scan measurements and AI interpretation use
+portmapper v2 NULL identification followed by DUMP enumeration. Advertised
+registrations remain separate from measured connectivity. Scan measurements and AI interpretation use
 separate models. Offline tests cover byte encoding, malformed responses,
 timeouts, scheduling, and preservation of open results when identification fails.
 

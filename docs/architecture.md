@@ -1,7 +1,8 @@
 # Architecture
 
-Version **0.5.2** connects bounded TCP portmapper v2 identification to the scanner
-alongside HTTP/HTTPS probing and passive SSH, FTP, and SMTP recognition. The
+Version **0.5.3** connects bounded TCP portmapper v2 identification and DUMP
+enumeration to the scanner alongside HTTP/HTTPS probing and passive SSH, FTP,
+and SMTP recognition. The
 IPv4 SYN pipeline continues to perform port discovery without application
 identification.
 
@@ -10,9 +11,6 @@ The current architecture separates measurements, protocol identification, and
 optional AI interpretation. Planned assessment context, connectivity-policy
 evaluation, and cross-run comparison will build on these boundaries; they are
 not implemented in this release. See [research direction](research.md).
-
-Current development extends the same TCP connect identification path to HTTPS
-on ports 443 and 8443, without adding application probes to SYN mode.
 
 rmap is a Rust network scanner inspired by Nmap, with optional AI research into observed services, possible CVEs, and public exploit references. It scans selected ports concurrently through bounded Tokio tasks for each unique IPv4 target using TCP connect, raw TCP SYN, or empty UDP probes. Hosts are processed sequentially.
 
@@ -69,6 +67,7 @@ flowchart TD
 | `src/scan/rpc.rs` | Bounded TCP portmapper NULL exchange, record encoding/assembly, reply validation, candidate selection, and validated-response mapping |
 | `src/scan/udp.rs` | One empty UDP probe, receive timeout, and outcome classification |
 | `src/model/mod.rs` | Shared measured results, transport and status enums, and separate AI data |
+| `src/model/rpc.rs` | Advertised program/version/protocol/port mappings, distinct from measured connectivity |
 | `src/model/progress.rs` | Display selected port count, timeout and throttled completion progress on stderr |
 | `src/model/report.rs` | Format measured results, interpretation, research notes, and sources |
 | `src/mapper/service_information.rs` | Map parsed service fields into owned `ServiceInformation` values and apply them to scan results |
@@ -85,7 +84,8 @@ Protocol parsers retain their format-specific rules. Shared byte operations live
 - `ScanMode` selects TCP connect, SYN, or UDP. Its transport mapping labels SYN results as TCP. Omitted mode flags default to TCP connect.
 - `PortStatus` represents open, closed, tentative filtered, open or filtered, or undetermined outcomes.
 - `ServiceInformation` stores the identified protocol label, transport, optional product and version, and optional banner comments. Banner comments are separate from the read stop reason in `ScanResult.observation`.
-- `ScanResult` records the selected port and transport, outcome, elapsed time, optional service label, error, observation, and collected banner bytes. Passive banner bytes and the reason reading stopped are stored separately; reporting generates a bounded preview without changing the stored data.
+- `ScanResult` records the selected port and transport, outcome, elapsed time, optional service label, error, observation, and collected banner bytes. Passive banner bytes and the reason reading stopped are stored separately; reporting generates a bounded preview without changing the stored data. Its optional `rpc_mappings` field holds advertised registrations from successful DUMP enumeration separately from those measurements.
+- `RpcMapping` retains four unsigned wire values: RPC program, program version, IP transport protocol, and port. Its program version is not a software release version, and its advertised endpoint is not a new measured open port.
 - `AiConfig` holds DeepSeek settings, a separate search key, the session timeout, and an optional local advisory path.
 - `AiAnalysis` contains generated interpretation, retrieved `WebSource` values, research notes, and optional local `CveCandidate` values.
 - `WebSource` holds a title, URL, and bounded snippet returned by a search request. It is evidence retrieved by the application independently of generated prose.
@@ -172,11 +172,11 @@ replies and exchange errors at this boundary; they do not open sockets.
 `scan_port` now selects this path for confirmed-open TCP port 111, closing its
 initial stream before `collect_rpc` starts a separate exchange. This preserves
 the descriptor budget of one TCP connection per active task. `collect_rpc`
-generates an XID with the existing `getrandom` dependency, computes one absolute
-deadline from the configured timeout, and invokes `rpc::probe` with a 4096-byte
-assembled-reply limit. The original XID reaches the result handler for matching.
-An XID-generation error becomes an identification diagnostic without sending a
-request or changing the open state.
+uses `run_rpc_exchange` to generate an XID with the existing `getrandom`
+dependency, compute an absolute deadline from the configured timeout, and invoke
+`rpc::probe` with a 4096-byte assembled-reply limit. The original XID reaches the
+result handler for matching. An XID-generation error becomes an identification
+diagnostic without sending a request or changing the open state.
 
 The exchange connects, sends the complete framed NULL call, and assembles reply
 fragments under that shared deadline. Each fragment's total size is checked
@@ -184,9 +184,35 @@ before allocation. The deadline is also checked each iteration to bound empty
 fragments. TCP elapsed time still measures only the initial connection attempt;
 identification has its own timeout budget. UDP and SYN do not enter this path.
 Tests inject exchanges into `collect_rpc` and use in-memory streams for record
-reading; no test here validates a live RPC server. Service enumeration, NFS, and
-RPC on other ports remain outside the initial scope. See
+reading; no test here validates a live RPC server. NFS identification and RPC on
+other ports remain outside the initial scope. See
 [RPC learning notes](rpc-identification.md).
+
+The common `build_portmapper_call` encodes the argument-free request header for
+NULL and DUMP, varying only the procedure number. Both wrappers return byte
+vectors directly. `validate_rpc_success_reply` validates the common envelope
+and returns the result-body offset. NULL then requires no remaining payload;
+the DUMP parser reads its list from that offset.
+
+Both probe wrappers reuse `exchange_rpc_call` and `exchange_rpc_stream`; the
+latter permits in-memory request/response tests without sockets. After NULL
+identifies portmapper, `scan_port` calls `collect_rpc_dump`, which uses
+`run_rpc_exchange` with `rpc::probe_dump`. This is a fresh connection, XID, and
+timeout budget; NULL's connection is already closed. Both exchanges share the
+4096-byte reply bound. DUMP parsing additionally enforces `MAX_DUMP_ENTRIES`
+(128) before adding another registration. `apply_rpc_dump_result` stores the
+parsed list and preserves NULL identification and measured state on enumeration
+failure. Repeated observation handling uses `append_observation` rather than
+replacing evidence.
+
+`ScanResult.rpc_mappings` uses `None` for no successful enumeration and
+`Some(Vec::new())` for a successful empty result. The report renders populated
+data as a separate advertised-registration table, using TCP/UDP labels or the
+raw IP protocol number when unknown. These rows do not affect scan counts or
+the open-port summary. The list parser validates markers, entry limits, truncation,
+and trailing bytes. Runtime enumeration only follows successful NULL
+identification on an open TCP port 111; no extra endpoint is probed based on a
+registration. UDP and SYN never call the enumeration helper.
 
 The SMTP parser first checks for an exact uppercase `SMTP` or `ESMTP` whitespace token, then requires a `220 ` or `220-` greeting prefix. It searches the remaining tokens for `Postfix` or `Exim`; the immediately following token is retained as a version only when it starts with an ASCII digit and contains ASCII alphanumeric characters, dots, hyphens, or underscores. Product and version are optional, so an unknown implementation still receives an `smtp` label. The same logic applies on nonstandard ports and is covered by in-memory fixtures.
 

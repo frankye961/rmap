@@ -21,6 +21,7 @@ pub(super) async fn scan_port(target: SocketAddr, timeout: Duration) -> ScanResu
         observation: None,
         banner: None,
         service_information: None,
+        rpc_mappings: None,
     };
     match probe(target, timeout).await {
         Ok((status, observation)) => {

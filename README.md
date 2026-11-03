@@ -1,6 +1,6 @@
 # rmap (ALPHA version)
 
-Current version: **0.5.2**.
+Current version: **0.5.3**.
 
 rmap is my research project in networking and cybersecurity. It began as a way
 to learn Rust and network programming and has grown into a network scanner
@@ -19,10 +19,13 @@ remediation. Those assessment features are planned; the current application
 provides the scanning and service-identification foundation. See
 [research goals and experiment guidance](docs/research.md).
 
-## Version 0.5.2: bounded RPC identification
+## Version 0.5.3: RPC identification and enumeration
 
 - Automatic TCP portmapper v2 NULL probing on confirmed-open port 111, with
   validated `rpcbind` identification and no guessed software version.
+- Automatic DUMP enumeration after successful identification, with at most
+  128 registrations and a separate advertised-endpoint table. Enumeration
+  failures preserve the open state and successful NULL identification.
 - One deadline for the RPC connection, request write, and fragmented reply;
   a 4096-byte assembled-reply limit and checks before fragment allocation.
 - HTTP and HTTPS identification using bounded `HEAD` requests and structured
@@ -31,7 +34,7 @@ provides the scanning and service-identification foundation. See
   learning and research documentation. No dependencies were added.
 
 Offline tests cover parsing, framing, timeouts, result preservation, and the
-scanner integration. Live RPC and TLS behavior still require controlled-lab
+scanner integration. Live DUMP and TLS behavior still require controlled-lab
 validation; the tests do not establish real-world scan accuracy or performance.
 
 ## HTTPS identification
@@ -74,10 +77,22 @@ share one identification deadline derived from `--timeout-ms`. The assembled
 reply is limited to 4096 bytes, checked before allocating each fragment.
 
 Other non-HTTP/HTTPS TCP ports retain passive banner collection. RPC probing adds
-no flag or dependency and does not run in UDP or SYN mode. Registered-service
-enumeration and NFS identification remain later work. This implementation has
+no flag or dependency and does not run in UDP or SYN mode. NFS identification
+remains later work. This implementation has
 offline tests; no live RPC validation has been performed by the assistant.
 See [RPC identification and learning notes](docs/rpc-identification.md).
+
+After successful NULL identification, the scanner now automatically sends a
+portmapper v2 DUMP request. Each exchange uses its own XID and `--timeout-ms`
+budget, shared across connect/write/read. DUMP accepts at most 128 registrations
+within the 4096-byte reply limit; malformed, oversized, or incomplete replies
+produce a diagnostic without removing the successful NULL identification.
+
+The console prints a separate advertised-registration table containing program,
+program version, transport, and port. An empty successful reply is displayed
+explicitly. Registrations do not establish reachability, add measured open ports,
+or expand the requested scan scope. Live DUMP interoperability has not been
+validated by the assistant; automated checks use fixtures and in-memory streams.
 
 The current application accepts individual IPv4 addresses, target lists, and CIDR
 subnets. It scans each unique host once using TCP connect, IPv4 TCP SYN, or UDP

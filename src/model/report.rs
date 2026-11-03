@@ -90,6 +90,52 @@ fn write_results(
             )?;
         }
     }
+    write_rpc_mappings(output, results)?;
+    Ok(())
+}
+
+/// Show registrations as advertised data, never as additional measured open ports.
+fn write_rpc_mappings(
+    output: &mut impl std::io::Write,
+    results: &[ScanResult],
+) -> std::io::Result<()> {
+    for result in results {
+        let Some(mappings) = result.rpc_mappings.as_ref() else {
+            continue;
+        };
+        writeln!(
+            output,
+            "\nRPC registrations advertised by {}/{}",
+            result.port,
+            result.transport.transport().as_str()
+        )?;
+        writeln!(
+            output,
+            "Advertised endpoints; connectivity has not been tested by enumeration."
+        )?;
+        if mappings.is_empty() {
+            writeln!(output, "No registrations advertised.")?;
+            continue;
+        }
+        writeln!(
+            output,
+            "{:<12} {:<12} {:<14} PORT",
+            "PROGRAM", "VERSION", "TRANSPORT"
+        )?;
+        writeln!(output, "{}", "-".repeat(51))?;
+        for mapping in mappings {
+            let transport = match mapping.protocol {
+                6 => "TCP".to_string(),
+                17 => "UDP".to_string(),
+                protocol => format!("IP({protocol})"),
+            };
+            writeln!(
+                output,
+                "{:<12} {:<12} {:<14} {}",
+                mapping.program, mapping.program_version, transport, mapping.port
+            )?;
+        }
+    }
     Ok(())
 }
 

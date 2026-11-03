@@ -1,5 +1,6 @@
 use super::{
-    apply_http_probe_result, apply_rpc_probe_result, banner_result, collect_rpc, read_banner,
+    apply_http_probe_result, apply_rpc_dump_result, apply_rpc_probe_result, banner_result,
+    collect_rpc, collect_rpc_dump, read_banner,
 };
 use crate::model::{PortStatus, ScanMode, ScanResult};
 use std::io;
@@ -19,6 +20,7 @@ fn measured_open_tcp_port(port: u16) -> ScanResult {
         observation: None,
         banner: None,
         service_information: None,
+        rpc_mappings: None,
     }
 }
 
@@ -114,6 +116,253 @@ fn http_probe_failure_preserves_the_open_port_without_inventing_a_service() {
 const RPC_REPLY: [u8; 24] = [
     0x12, 0x34, 0x56, 0x78, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 ];
+
+fn advertised_mapping() -> crate::model::rpc::RpcMapping {
+    crate::model::rpc::RpcMapping {
+        program: 100000,
+        program_version: 2,
+        protocol: 6,
+        port: 111,
+    }
+}
+
+fn dump_reply_fixture(xid: u32, mappings: &[crate::model::rpc::RpcMapping]) -> Vec<u8> {
+    let mut reply = RPC_REPLY.to_vec();
+    reply[..4].copy_from_slice(&xid.to_be_bytes());
+    for mapping in mappings {
+        reply.extend_from_slice(&[0, 0, 0, 1]);
+        for value in [
+            mapping.program,
+            mapping.program_version,
+            mapping.protocol,
+            mapping.port,
+        ] {
+            reply.extend_from_slice(&value.to_be_bytes());
+        }
+    }
+    reply.extend_from_slice(&[0; 4]);
+    reply
+}
+
+#[tokio::test]
+async fn null_identification_then_dump_collection_populates_advertised_mappings() {
+    let mut result = measured_open_tcp_port(111);
+    let timeout = Duration::from_secs(1);
+    collect_rpc(&mut result, timeout, |xid, _, _| async move {
+        let mut reply = RPC_REPLY.to_vec();
+        reply[..4].copy_from_slice(&xid.to_be_bytes());
+        Ok(reply)
+    })
+    .await;
+    let information = result.service_information.clone();
+    let before = tokio::time::Instant::now();
+    collect_rpc_dump(&mut result, timeout, |xid, deadline, limit| {
+        assert!(deadline >= before + timeout);
+        assert!(deadline <= tokio::time::Instant::now() + timeout);
+        assert_eq!(limit, 4096);
+        async move { Ok(dump_reply_fixture(xid, &[advertised_mapping()])) }
+    })
+    .await;
+    assert_eq!(result.rpc_mappings, Some(vec![advertised_mapping()]));
+    assert_eq!(result.service.as_deref(), Some("rpcbind"));
+    assert_eq!(result.service_information, information);
+    assert_eq!(result.status, PortStatus::Open);
+    assert_eq!(result.elapsed, Duration::from_millis(17));
+    assert!(result.error.is_none());
+    assert!(result.banner.is_none());
+}
+
+#[tokio::test]
+async fn dump_collection_records_a_successful_empty_list() {
+    let mut result = measured_open_tcp_port(111);
+    apply_rpc_probe_result(&mut result, Ok(&RPC_REPLY), 0x12345678);
+    collect_rpc_dump(
+        &mut result,
+        Duration::from_secs(1),
+        |xid, _, _| async move { Ok(dump_reply_fixture(xid, &[])) },
+    )
+    .await;
+    assert_eq!(result.rpc_mappings, Some(Vec::new()));
+    assert_eq!(result.service.as_deref(), Some("rpcbind"));
+}
+
+#[tokio::test]
+async fn dump_io_and_parse_failures_preserve_successful_null_identification() {
+    for failure in ["io", "truncated", "status", "xid"] {
+        let mut result = measured_open_tcp_port(111);
+        apply_rpc_probe_result(&mut result, Ok(&RPC_REPLY), 0x12345678);
+        let information = result.service_information.clone();
+        collect_rpc_dump(
+            &mut result,
+            Duration::from_secs(1),
+            |xid, _, _| async move {
+                match failure {
+                    "io" => Err("fixture DUMP timeout".into()),
+                    "truncated" => Ok(Vec::new()),
+                    "status" => {
+                        let mut reply = dump_reply_fixture(xid, &[]);
+                        reply[23] = 1;
+                        Ok(reply)
+                    }
+                    _ => Ok(dump_reply_fixture(xid.wrapping_add(1), &[])),
+                }
+            },
+        )
+        .await;
+        assert_eq!(result.status, PortStatus::Open);
+        assert_eq!(result.service.as_deref(), Some("rpcbind"));
+        assert_eq!(result.service_information, information);
+        assert!(result.rpc_mappings.is_none());
+        assert!(result.error.is_none());
+        assert_eq!(result.elapsed, Duration::from_millis(17));
+        let detail = result.observation.as_deref().unwrap();
+        assert!(detail.contains("NULL procedure succeeded"));
+        assert!(detail.contains("RPC enumeration failed: "));
+    }
+}
+
+#[tokio::test]
+async fn failed_null_identification_prevents_the_dump_exchange() {
+    for malformed in [false, true] {
+        let mut result = measured_open_tcp_port(111);
+        collect_rpc(&mut result, Duration::from_secs(1), |_, _, _| async move {
+            if malformed {
+                Ok(Vec::new())
+            } else {
+                Err("fixture NULL failure".into())
+            }
+        })
+        .await;
+        let detail = result.observation.clone();
+        collect_rpc_dump(&mut result, Duration::from_secs(1), |_, _, _| async {
+            panic!("DUMP must not run after failed NULL identification")
+        })
+        .await;
+        assert_eq!(result.observation, detail);
+        assert_eq!(result.status, PortStatus::Open);
+        assert!(result.service.is_none());
+        assert!(result.rpc_mappings.is_none());
+    }
+}
+
+#[tokio::test]
+async fn dump_collection_skips_other_ports_states_and_scan_modes() {
+    for (port, transport, status) in [
+        (80, ScanMode::Tcp, PortStatus::Open),
+        (2049, ScanMode::Tcp, PortStatus::Open),
+        (111, ScanMode::Udp, PortStatus::Open),
+        (111, ScanMode::Syn, PortStatus::Open),
+        (111, ScanMode::Tcp, PortStatus::Closed),
+        (111, ScanMode::Tcp, PortStatus::Unknown),
+    ] {
+        let mut result = measured_open_tcp_port(port);
+        result.transport = transport;
+        result.status = status;
+        result.service = Some("rpcbind".into());
+        collect_rpc_dump(&mut result, Duration::from_secs(1), |_, _, _| async {
+            panic!("DUMP must not run for this scan result")
+        })
+        .await;
+        assert_eq!(result.status, status);
+        assert_eq!(result.transport, transport);
+        assert!(result.rpc_mappings.is_none());
+    }
+}
+
+#[tokio::test]
+async fn dump_collection_rejects_lists_above_128_entries_without_storing_partial_data() {
+    let mut result = measured_open_tcp_port(111);
+    apply_rpc_probe_result(&mut result, Ok(&RPC_REPLY), 0x12345678);
+    collect_rpc_dump(
+        &mut result,
+        Duration::from_secs(1),
+        |xid, _, _| async move { Ok(dump_reply_fixture(xid, &vec![advertised_mapping(); 129])) },
+    )
+    .await;
+    assert!(result.rpc_mappings.is_none());
+    assert_eq!(result.status, PortStatus::Open);
+    assert_eq!(result.service.as_deref(), Some("rpcbind"));
+    assert!(
+        result
+            .observation
+            .as_deref()
+            .unwrap()
+            .contains("maximum of 128 entries")
+    );
+}
+
+#[test]
+fn parsed_dump_mappings_preserve_null_identification_and_measurements() {
+    let mut result = measured_open_tcp_port(111);
+    apply_rpc_probe_result(&mut result, Ok(&RPC_REPLY), 0x12345678);
+    result.banner = Some(b"earlier evidence".to_vec());
+    let information = result.service_information.clone();
+    let observation = result.observation.clone();
+    apply_rpc_dump_result(&mut result, Ok(vec![advertised_mapping()]));
+    assert_eq!(result.rpc_mappings, Some(vec![advertised_mapping()]));
+    assert_eq!(result.service_information, information);
+    assert_eq!(result.observation, observation);
+    assert_eq!(result.service.as_deref(), Some("rpcbind"));
+    assert_eq!(result.port, 111);
+    assert_eq!(result.status, PortStatus::Open);
+    assert_eq!(result.transport, ScanMode::Tcp);
+    assert_eq!(result.elapsed, Duration::from_millis(17));
+    assert!(result.error.is_none());
+    assert_eq!(
+        result.banner.as_deref(),
+        Some(b"earlier evidence".as_slice())
+    );
+}
+
+#[test]
+fn dump_failure_preserves_successful_null_results_and_any_existing_mappings() {
+    for existing in [None, Some(vec![advertised_mapping()])] {
+        let mut result = measured_open_tcp_port(111);
+        apply_rpc_probe_result(&mut result, Ok(&RPC_REPLY), 0x12345678);
+        let information = result.service_information.clone();
+        result.rpc_mappings = existing.clone();
+        apply_rpc_dump_result(&mut result, Err("fixture parse failure".into()));
+        assert_eq!(result.status, PortStatus::Open);
+        assert_eq!(result.service.as_deref(), Some("rpcbind"));
+        assert_eq!(result.service_information, information);
+        assert_eq!(result.rpc_mappings, existing);
+        assert!(result.error.is_none());
+        let detail = result.observation.as_deref().unwrap();
+        assert!(detail.contains("NULL procedure succeeded"));
+        assert!(detail.contains("RPC enumeration failed: fixture parse failure"));
+    }
+}
+
+#[test]
+fn successful_empty_dump_is_distinct_from_no_successful_enumeration() {
+    let mut result = measured_open_tcp_port(111);
+    assert!(result.rpc_mappings.is_none());
+    apply_rpc_probe_result(&mut result, Ok(&RPC_REPLY), 0x12345678);
+    apply_rpc_dump_result(&mut result, Ok(Vec::new()));
+    assert_eq!(result.rpc_mappings, Some(Vec::new()));
+    assert_eq!(result.status, PortStatus::Open);
+}
+
+#[test]
+fn dump_result_is_ignored_without_successful_tcp_portmapper_identification() {
+    for (port, transport, status, service) in [
+        (80, ScanMode::Tcp, PortStatus::Open, Some("rpcbind")),
+        (111, ScanMode::Udp, PortStatus::Open, Some("rpcbind")),
+        (111, ScanMode::Syn, PortStatus::Open, Some("rpcbind")),
+        (111, ScanMode::Tcp, PortStatus::Closed, Some("rpcbind")),
+        (111, ScanMode::Tcp, PortStatus::Open, None),
+        (111, ScanMode::Tcp, PortStatus::Open, Some("http")),
+    ] {
+        let mut result = measured_open_tcp_port(port);
+        result.transport = transport;
+        result.status = status;
+        result.service = service.map(str::to_string);
+        apply_rpc_dump_result(&mut result, Ok(vec![advertised_mapping()]));
+        assert!(result.rpc_mappings.is_none());
+        assert_eq!(result.service.as_deref(), service);
+        assert_eq!(result.status, status);
+    }
+}
 
 #[tokio::test]
 async fn rpc_collection_uses_one_xid_deadline_and_reply_limit_then_maps_the_reply() {

@@ -1,14 +1,104 @@
 use super::{
-    append_u32, build_portmapper_null_call, decode_record_marker, frame_rpc_record,
-    is_rpc_candidate, probe, read_rpc_record, read_u32, record_marker, response_information,
+    append_u32, build_portmapper_dump_call, build_portmapper_null_call, decode_record_marker,
+    exchange_rpc_stream, frame_rpc_record, is_rpc_candidate, parse_portmapper_dump_reply, probe,
+    probe_dump, read_rpc_mapping, read_rpc_record, read_u32, record_marker, response_information,
     skip_rpc_verifier, validate_portmapper_null_reply, validate_rpc_reply_header,
+    validate_rpc_success_reply,
 };
 
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Duration;
-use tokio::io::{AsyncRead, AsyncWriteExt, ReadBuf};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, ReadBuf};
 use tokio::time::Instant;
+
+// Program 100000, program version 2, TCP (6), port 111.
+const RPC_MAPPING: [u8; 16] = [0, 1, 0x86, 0xa0, 0, 0, 0, 2, 0, 0, 0, 6, 0, 0, 0, 111];
+
+#[test]
+fn reads_an_advertised_mapping_in_wire_order() {
+    let mut offset = 0;
+    assert_eq!(
+        read_rpc_mapping(&RPC_MAPPING, &mut offset).unwrap(),
+        crate::model::rpc::RpcMapping {
+            program: 100000,
+            program_version: 2,
+            protocol: 6,
+            port: 111,
+        }
+    );
+    assert_eq!(offset, 16);
+}
+
+#[test]
+fn reads_successive_mappings_from_a_nonzero_cursor() {
+    let mut data = vec![0xaa; 3];
+    data.extend_from_slice(&RPC_MAPPING);
+    data.extend_from_slice(&RPC_MAPPING);
+    let mut offset = 3;
+    for expected_end in [19, 35] {
+        assert_eq!(read_rpc_mapping(&data, &mut offset).unwrap().port, 111);
+        assert_eq!(offset, expected_end);
+    }
+}
+
+#[test]
+fn incomplete_mapping_fields_leave_the_callers_cursor_unchanged() {
+    for start in [0, 3] {
+        for length in 0..16 {
+            let mut data = vec![0xaa; start];
+            data.extend_from_slice(&RPC_MAPPING[..length]);
+            let mut offset = start;
+            let error = read_rpc_mapping(&data, &mut offset).unwrap_err();
+            let field = match length {
+                0..=3 => "program number",
+                4..=7 => "program version",
+                8..=11 => "protocol number",
+                _ => "port number",
+            };
+            assert!(error.contains(field), "length {length}: {error}");
+            assert_eq!(offset, start);
+        }
+    }
+}
+
+#[test]
+fn mapping_port_validation_rejects_zero_and_oversized_values_without_advancing() {
+    for port in [0_u32, 65536, u32::MAX] {
+        let mut mapping = RPC_MAPPING;
+        mapping[12..16].copy_from_slice(&port.to_be_bytes());
+        let mut offset = 0;
+        let error = read_rpc_mapping(&mapping, &mut offset).unwrap_err();
+        assert!(error.contains("out of range 1..=65535"));
+        assert!(error.contains(&port.to_string()));
+        assert_eq!(offset, 0);
+    }
+}
+
+#[test]
+fn mapping_preserves_tcp_udp_and_boundary_ports_as_u32_values() {
+    for protocol in [6_u32, 17] {
+        for port in [1_u32, 65535] {
+            let mut mapping = RPC_MAPPING;
+            mapping[8..12].copy_from_slice(&protocol.to_be_bytes());
+            mapping[12..16].copy_from_slice(&port.to_be_bytes());
+            let mut offset = 0;
+            let parsed = read_rpc_mapping(&mapping, &mut offset).unwrap();
+            assert_eq!(parsed.protocol, protocol);
+            assert_eq!(parsed.port, port);
+            assert_eq!(offset, 16);
+        }
+    }
+}
+
+#[test]
+fn invalid_mapping_offsets_return_an_error_without_panicking_or_advancing() {
+    for start in [16, 17, usize::MAX - 3, usize::MAX] {
+        let mut offset = start;
+        assert!(read_rpc_mapping(&RPC_MAPPING, &mut offset).is_err());
+        assert_eq!(offset, start);
+    }
+}
 
 // Independent accepted-reply header: XID 0x12345678, REPLY, MSG_ACCEPTED.
 const ACCEPTED_REPLY_HEADER: [u8; 12] = [0x12, 0x34, 0x56, 0x78, 0, 0, 0, 1, 0, 0, 0, 0];
@@ -22,6 +112,253 @@ const NULL_REPLY: [u8; 24] = [
     0, 0, 0, 0, // Verifier body length.
     0, 0, 0, 0, // SUCCESS.
 ];
+
+// Accepted reply with one advertised TCP registration and a terminating false marker.
+const DUMP_REPLY: [u8; 48] = [
+    0x12, 0x34, 0x56, 0x78, // XID.
+    0, 0, 0, 1, // REPLY.
+    0, 0, 0, 0, // MSG_ACCEPTED.
+    0, 0, 0, 0, // AUTH_NONE verifier.
+    0, 0, 0, 0, // Empty verifier body.
+    0, 0, 0, 0, // SUCCESS.
+    0, 0, 0, 1, // Entry follows.
+    0, 1, 0x86, 0xa0, // Program 100000.
+    0, 0, 0, 2, // Program version.
+    0, 0, 0, 6, // TCP.
+    0, 0, 0, 111, // Advertised port.
+    0, 0, 0, 0, // End of list.
+];
+
+#[test]
+fn accepts_an_empty_dump_even_with_a_zero_entry_limit() {
+    let mut reply = NULL_REPLY.to_vec();
+    reply.extend_from_slice(&[0; 4]);
+    for limit in [0, 1, 128] {
+        assert_eq!(
+            parse_portmapper_dump_reply(&reply, 0x12345678, limit),
+            Ok(Vec::new())
+        );
+    }
+}
+
+#[test]
+fn accepts_dump_lists_at_exactly_the_entry_limit() {
+    let first = crate::model::rpc::RpcMapping {
+        program: 100000,
+        program_version: 2,
+        protocol: 6,
+        port: 111,
+    };
+    assert_eq!(
+        parse_portmapper_dump_reply(&DUMP_REPLY, 0x12345678, 1),
+        Ok(vec![first.clone()])
+    );
+    let mut reply = DUMP_REPLY[..44].to_vec();
+    let mut second_wire = RPC_MAPPING;
+    second_wire[8..12].copy_from_slice(&17_u32.to_be_bytes());
+    second_wire[12..16].copy_from_slice(&2049_u32.to_be_bytes());
+    reply.extend_from_slice(&[0, 0, 0, 1]);
+    reply.extend_from_slice(&second_wire);
+    reply.extend_from_slice(&[0; 4]);
+    let second = crate::model::rpc::RpcMapping {
+        program: 100000,
+        program_version: 2,
+        protocol: 17,
+        port: 2049,
+    };
+    assert_eq!(
+        parse_portmapper_dump_reply(&reply, 0x12345678, 2),
+        Ok(vec![first, second])
+    );
+}
+
+#[test]
+fn rejects_an_extra_entry_before_attempting_to_read_its_fields() {
+    let mut reply = NULL_REPLY.to_vec();
+    reply.extend_from_slice(&[0, 0, 0, 1]); // No entry bytes: limit must be checked first.
+    let error = parse_portmapper_dump_reply(&reply, 0x12345678, 0).unwrap_err();
+    assert!(error.contains("exceeded maximum of 0 entries"));
+
+    let mut reply = DUMP_REPLY[..44].to_vec();
+    reply.extend_from_slice(&[0, 0, 0, 1]);
+    let error = parse_portmapper_dump_reply(&reply, 0x12345678, 1).unwrap_err();
+    assert!(error.contains("exceeded maximum of 1 entries"));
+}
+
+#[test]
+fn rejects_invalid_xdr_list_markers_before_and_after_entries() {
+    for marker in [2_u32, u32::MAX] {
+        for prefix in [&NULL_REPLY[..], &DUMP_REPLY[..44]] {
+            let mut reply = prefix.to_vec();
+            reply.extend_from_slice(&marker.to_be_bytes());
+            let error = parse_portmapper_dump_reply(&reply, 0x12345678, 1).unwrap_err();
+            assert!(error.contains("Unexpected RPC list marker"));
+            assert!(error.contains(&marker.to_string()));
+        }
+    }
+}
+
+#[test]
+fn rejects_all_dump_truncations_including_a_missing_final_terminator() {
+    for length in 0..DUMP_REPLY.len() {
+        assert!(
+            parse_portmapper_dump_reply(&DUMP_REPLY[..length], 0x12345678, 1).is_err(),
+            "accepted truncated reply of length {length}"
+        );
+    }
+    let error = parse_portmapper_dump_reply(&DUMP_REPLY[..44], 0x12345678, 1).unwrap_err();
+    assert!(error.contains("Incomplete RPC list marker"));
+}
+
+#[test]
+fn rejects_trailing_bytes_after_empty_and_nonempty_dump_lists() {
+    let mut empty = NULL_REPLY.to_vec();
+    empty.extend_from_slice(&[0; 4]);
+    for valid in [&empty[..], &DUMP_REPLY[..]] {
+        for extra in [&[0_u8][..], &[0, 0, 0, 0][..], &[0xff, 0xaa][..]] {
+            let mut reply = valid.to_vec();
+            reply.extend_from_slice(extra);
+            let error = parse_portmapper_dump_reply(&reply, 0x12345678, 1).unwrap_err();
+            assert!(error.contains("Unexpected bytes after RPC DUMP list"));
+        }
+    }
+}
+
+#[test]
+fn dump_parser_reuses_header_verifier_and_procedure_validation() {
+    assert!(
+        parse_portmapper_dump_reply(&DUMP_REPLY, 0x12345679, 1)
+            .unwrap_err()
+            .contains("transaction ID does not match")
+    );
+    for (index, value, message) in [
+        (7, 0, "Expected RPC REPLY"),
+        (11, 1, "Expected RPC MSG_ACCEPTED"),
+        (23, 1, "RPC procedure did not succeed"),
+    ] {
+        let mut reply = DUMP_REPLY;
+        reply[index] = value;
+        assert!(
+            parse_portmapper_dump_reply(&reply, 0x12345678, 1)
+                .unwrap_err()
+                .contains(message)
+        );
+    }
+    let mut reply = DUMP_REPLY;
+    reply[16..20].copy_from_slice(&401_u32.to_be_bytes());
+    assert!(
+        parse_portmapper_dump_reply(&reply, 0x12345678, 1)
+            .unwrap_err()
+            .contains("maximum of 400 bytes")
+    );
+}
+
+#[test]
+fn dump_parser_rejects_out_of_range_advertised_ports() {
+    for port in [0_u32, 65536, u32::MAX] {
+        let mut reply = DUMP_REPLY;
+        reply[40..44].copy_from_slice(&port.to_be_bytes());
+        assert!(
+            parse_portmapper_dump_reply(&reply, 0x12345678, 1)
+                .unwrap_err()
+                .contains("out of range 1..=65535")
+        );
+    }
+}
+
+#[test]
+fn shared_success_validation_leaves_procedure_payload_for_the_caller() {
+    let mut reply = NULL_REPLY.to_vec();
+    reply.extend_from_slice(&[0, 0, 0, 0]); // Empty DUMP-list terminator.
+    assert_eq!(validate_rpc_success_reply(&reply, 0x12345678), Ok(24));
+    assert!(validate_portmapper_null_reply(&reply, 0x12345678).is_err());
+
+    let mut reply = ACCEPTED_REPLY_HEADER.to_vec();
+    reply.extend_from_slice(&[0, 0, 0, 1, 0, 0, 0, 1, 0xaa, 0, 0, 0]);
+    reply.extend_from_slice(&[0; 8]); // SUCCESS, then empty-list terminator.
+    assert_eq!(validate_rpc_success_reply(&reply, 0x12345678), Ok(28));
+}
+
+#[tokio::test]
+async fn shared_stream_exchange_sends_null_and_dump_requests_before_reading() {
+    for (call, expected_call, has_list) in [
+        (
+            build_portmapper_null_call(0x12345678),
+            PORTMAPPER_NULL_CALL,
+            false,
+        ),
+        (
+            build_portmapper_dump_call(0x12345678),
+            PORTMAPPER_DUMP_CALL,
+            true,
+        ),
+    ] {
+        let frame = frame_rpc_record(&call).unwrap();
+        let mut reply = NULL_REPLY.to_vec();
+        if has_list {
+            reply.extend_from_slice(&[0; 4]);
+        }
+        let expected_reply = reply.clone();
+        let (mut client, mut server) = tokio::io::duplex(8);
+        let exchange = exchange_rpc_stream(
+            &mut client,
+            &frame,
+            Instant::now() + Duration::from_secs(1),
+            4096,
+        );
+        let serve = async move {
+            let mut request = [0; 44];
+            server.read_exact(&mut request).await.unwrap();
+            assert_eq!(&request[..4], &[0x80, 0, 0, 40]);
+            assert_eq!(&request[4..], &expected_call);
+            let marker = 0x80000000_u32 | reply.len() as u32;
+            server.write_all(&marker.to_be_bytes()).await.unwrap();
+            server.write_all(&reply).await.unwrap();
+        };
+        let (received, ()) = tokio::join!(exchange, serve);
+        assert_eq!(received.unwrap(), expected_reply);
+    }
+}
+
+#[tokio::test]
+async fn shared_exchange_reports_write_failure_before_attempting_a_read() {
+    let (mut client, server) = tokio::io::duplex(8);
+    drop(server);
+    let frame = frame_rpc_record(&PORTMAPPER_NULL_CALL).unwrap();
+    let error = exchange_rpc_stream(
+        &mut client,
+        &frame,
+        Instant::now() + Duration::from_secs(1),
+        4096,
+    )
+    .await
+    .unwrap_err();
+    assert!(error.contains("Failed to write RPC request"));
+}
+
+#[tokio::test]
+async fn shared_exchange_bounds_a_blocked_request_write() {
+    let (mut client, server) = tokio::io::duplex(1);
+    let frame = frame_rpc_record(&PORTMAPPER_DUMP_CALL).unwrap();
+    let error = exchange_rpc_stream(
+        &mut client,
+        &frame,
+        Instant::now() + Duration::from_millis(20),
+        4096,
+    )
+    .await
+    .unwrap_err();
+    assert!(error.contains("RPC request writing timed out"));
+    drop(server);
+}
+
+#[tokio::test]
+async fn dump_probe_rejects_an_expired_deadline_before_connecting() {
+    let error = probe_dump("192.0.2.1:111".parse().unwrap(), 1, Instant::now(), 4096)
+        .await
+        .unwrap_err();
+    assert!(error.contains("RPC connection timed out"));
+}
 
 // An in-memory reader that deliberately returns at most one byte per read.
 struct OneByteReads<'a>(&'a [u8]);
@@ -245,7 +582,7 @@ fn rejects_procedure_errors_even_when_the_rpc_header_was_accepted() {
         let mut reply = NULL_REPLY;
         reply[20..24].copy_from_slice(&status.to_be_bytes());
         let error = validate_portmapper_null_reply(&reply, 0x12345678).unwrap_err();
-        assert!(error.contains("RPC NULL procedure did not succeed"));
+        assert!(error.contains("RPC procedure did not succeed"));
         assert!(error.contains(&format!("accept status {status}")));
     }
 }
@@ -558,6 +895,45 @@ const PORTMAPPER_NULL_CALL: [u8; 40] = [
     0x00, 0x00, 0x00, 0x00, // Verifier flavor: AUTH_NONE.
     0x00, 0x00, 0x00, 0x00, // Verifier data length.
 ];
+
+// Independent wire fixture: DUMP is procedure 4 on portmapper version 2.
+const PORTMAPPER_DUMP_CALL: [u8; 40] = [
+    0x12, 0x34, 0x56, 0x78, // XID.
+    0, 0, 0, 0, // CALL.
+    0, 0, 0, 2, // RPC protocol version.
+    0, 1, 0x86, 0xa0, // Program 100000.
+    0, 0, 0, 2, // Portmapper program version.
+    0, 0, 0, 4, // DUMP procedure.
+    0, 0, 0, 0, // Credential flavor: AUTH_NONE.
+    0, 0, 0, 0, // Credential body length.
+    0, 0, 0, 0, // Verifier flavor: AUTH_NONE.
+    0, 0, 0, 0, // Verifier body length.
+];
+
+#[test]
+fn builds_the_complete_dump_request_using_portmapper_version_two() {
+    assert_eq!(build_portmapper_dump_call(0x12345678), PORTMAPPER_DUMP_CALL);
+}
+
+#[test]
+fn dump_transaction_id_changes_only_the_first_four_bytes() {
+    for xid in [0_u32, 1, 0x80000000, u32::MAX] {
+        let call = build_portmapper_dump_call(xid);
+        assert_eq!(call.len(), 40);
+        assert_eq!(&call[..4], &xid.to_be_bytes());
+        assert_eq!(&call[4..], &PORTMAPPER_DUMP_CALL[4..]);
+    }
+}
+
+#[test]
+fn frames_the_dump_request_without_changing_its_procedure_or_null_behavior() {
+    let call = build_portmapper_dump_call(0x12345678);
+    let frame = frame_rpc_record(&call).unwrap();
+    assert_eq!(frame.len(), 44);
+    assert_eq!(&frame[..4], &[0x80, 0, 0, 40]);
+    assert_eq!(&frame[4..], &PORTMAPPER_DUMP_CALL);
+    assert_eq!(build_portmapper_null_call(0x12345678), PORTMAPPER_NULL_CALL);
+}
 
 #[test]
 fn builds_the_complete_portmapper_null_call_in_wire_order() {

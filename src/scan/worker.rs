@@ -72,6 +72,7 @@ fn failed_probe(target: SocketAddr, mode: ScanMode, started: Instant) -> ScanRes
         observation: None,
         banner: None,
         service_information: None,
+        rpc_mappings: None,
     }
 }
 
