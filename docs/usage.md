@@ -43,7 +43,7 @@ rmap --help
 Cargo's installation directory, usually `~/.cargo/bin`, must be on `PATH`. Reinstall after source changes when invoking the installed `rmap`; building the project alone does not update that executable.
 
 After installation, `rmap --help` prints the startup banner with version
-`v0.5.2` without starting a scan. The same check can be made directly with
+`v0.5.3` without starting a scan. The same check can be made directly with
 `./target/release/rmap --help`.
 
 ## Select TCP connect, TCP SYN, or UDP

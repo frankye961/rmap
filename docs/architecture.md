@@ -1,7 +1,8 @@
 # Architecture
 
-Version **0.5.2** connects bounded TCP portmapper v2 identification to the scanner
-alongside HTTP/HTTPS probing and passive SSH, FTP, and SMTP recognition. The
+Version **0.5.3** connects bounded TCP portmapper v2 identification and DUMP
+enumeration to the scanner alongside HTTP/HTTPS probing and passive SSH, FTP,
+and SMTP recognition. The
 IPv4 SYN pipeline continues to perform port discovery without application
 identification.
 

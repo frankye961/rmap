@@ -10,10 +10,11 @@ socket setup, packet construction, checksums, asynchronous sending, receiving,
 and reply parsing, validation, and classification.
 The earlier TCP scanner and banner grabbing are explained briefly for context.
 
-Version 0.5.2 includes automatic HTTP probing on TCP connect ports 80, 8000,
+Version 0.5.3 includes automatic HTTP probing on TCP connect ports 80, 8000,
 8080, and 8888, HTTPS probing on 443 and 8443, and portmapper NULL identification
-followed by DUMP enumeration on TCP port 111. This application identification is separate from the SYN scanner covered
-here. See [HTTPS identification](https-identification.md) and
+followed by DUMP enumeration on TCP port 111. This application identification
+is separate from the SYN scanner covered here. See
+[HTTPS identification](https-identification.md) and
 [RPC identification](rpc-identification.md) for those request and result flows.
 
 ## Contents

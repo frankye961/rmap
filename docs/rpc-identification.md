@@ -1,6 +1,6 @@
 # RPC identification and learning notes
 
-Implemented in rmap **0.5.2** as part of the network and cybersecurity
+Included in rmap **0.5.3** as part of the network and cybersecurity
 [research project](research.md). The behavior described here is supported by
 offline fixtures; live protocol validation remains separate work.
 
