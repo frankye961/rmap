@@ -1,11 +1,15 @@
 # Architecture
 
-Version **0.5.1** adds automatic HTTP candidate probing and structured header
-identification in TCP connect scans. The IPv4 SYN pipeline introduced in 0.5.0
-continues to perform port discovery without application identification.
+Version **0.5.2** connects bounded TCP portmapper v2 identification to the scanner
+alongside HTTP/HTTPS probing and passive SSH, FTP, and SMTP recognition. The
+IPv4 SYN pipeline continues to perform port discovery without application
+identification.
 
-Current development extends the same TCP connect identification path to HTTPS
-on ports 443 and 8443, without adding application probes to SYN mode.
+rmap is also the author's research project in networking and cybersecurity.
+The current architecture separates measurements, protocol identification, and
+optional AI interpretation. Planned assessment context, connectivity-policy
+evaluation, and cross-run comparison will build on these boundaries; they are
+not implemented in this release. See [research direction](research.md).
 
 rmap is a Rust network scanner inspired by Nmap, with optional AI research into observed services, possible CVEs, and public exploit references. It scans selected ports concurrently through bounded Tokio tasks for each unique IPv4 target using TCP connect, raw TCP SYN, or empty UDP probes. Hosts are processed sequentially.
 
@@ -20,8 +24,10 @@ flowchart TD
     Pool --> UDP[udp.rs: empty UDP probes]
     Pool --> SYN[syn module: raw SYN and validated reply loop]
     TCP --> HTTP[http.rs: HEAD probes on open HTTP and HTTPS candidate ports]
+    TCP --> RPC[rpc.rs: bounded NULL probe on open TCP port 111]
     TCP --> Results[Structured ScanResult values]
     HTTP --> Results
+    RPC --> Results
     UDP --> Results
     SYN --> Results
     Results --> Report[Measured console report]
@@ -54,10 +60,10 @@ flowchart TD
 | `src/model/syn.rs` | Parsed packet, reply, and original-probe values |
 | `src/mapper/syn.rs` | Map SYN measurements into TCP results |
 | `src/scan/worker.rs` | Schedule bounded async tasks on a shared Tokio runtime, report completions, and restore input order |
-| `src/scan/tcp.rs` | TCP connection attempts, status classification, bounded passive reads, and collected-banner identification |
+| `src/scan/tcp.rs` | TCP connection measurements, HTTP/HTTPS/RPC dispatch, bounded passive reads, and result-preserving identification |
 | `src/scan/identify.rs` | Parse supported SSH, HTTP, FTP and SMTP banners into service information |
 | `src/scan/http.rs` | HTTP/HTTPS candidate and request selection, bounded `HEAD` probes, and structured `Server` header extraction |
-| `src/scan/rpc.rs` | In-memory RPC request/framing helpers, reply validation, TCP candidate selection, and validated-response mapping; no network exchange yet |
+| `src/scan/rpc.rs` | Bounded TCP portmapper NULL exchange, record encoding/assembly, reply validation, candidate selection, and validated-response mapping |
 | `src/scan/udp.rs` | One empty UDP probe, receive timeout, and outcome classification |
 | `src/model/mod.rs` | Shared measured results, transport and status enums, and separate AI data |
 | `src/model/progress.rs` | Display selected port count, timeout and throttled completion progress on stderr |
@@ -69,7 +75,7 @@ flowchart TD
 | `src/ai/web.rs` | Bounded Brave Search HTTP requests exposed as a Rig tool and capture of returned evidence |
 | `src/ai/service.rs` | Research instructions, bounded scan context, model/tool orchestration, and error handling |
 
-Protocol parsers retain their format-specific rules. Shared byte operations live in utility functions, and model construction lives in mapper functions. SSH, HTTP, FTP and SMTP reuse the same service mapper; TCP banner previews, UDP response previews and HTTP header previews reuse the same byte-escaping helper. AI context and local advisory matching reuse the same banner-text decoder. These modules use ordinary Rust functions and do not add dependencies.
+Protocol parsers retain their format-specific rules. Shared byte operations live in utility functions, and model construction lives in mapper functions. SSH, HTTP, FTP, SMTP, and RPC reuse the same service mapper; TCP banner previews, UDP response previews and HTTP header previews reuse the same byte-escaping helper. AI context and local advisory matching reuse the same banner-text decoder. These modules use ordinary Rust functions and do not add dependencies.
 
 ## Shared types
 
@@ -160,10 +166,24 @@ open TCP-connect candidate. Successful identification uses
 Connection state, elapsed time, socket error, and passive bytes are preserved.
 Failure also retains any previous service identification. Tests supply fixture
 replies and exchange errors at this boundary; they do not open sockets.
-The handler is not called from `scan_port` yet: TCP record decoding, bounded
-fragment reading, and the actual network exchange remain unimplemented. Normal
-scans retain their current passive behavior on port 111. See
-[RPC learning notes](rpc-identification.md) for the remaining work.
+`scan_port` now selects this path for confirmed-open TCP port 111, closing its
+initial stream before `collect_rpc` starts a separate exchange. This preserves
+the descriptor budget of one TCP connection per active task. `collect_rpc`
+generates an XID with the existing `getrandom` dependency, computes one absolute
+deadline from the configured timeout, and invokes `rpc::probe` with a 4096-byte
+assembled-reply limit. The original XID reaches the result handler for matching.
+An XID-generation error becomes an identification diagnostic without sending a
+request or changing the open state.
+
+The exchange connects, sends the complete framed NULL call, and assembles reply
+fragments under that shared deadline. Each fragment's total size is checked
+before allocation. The deadline is also checked each iteration to bound empty
+fragments. TCP elapsed time still measures only the initial connection attempt;
+identification has its own timeout budget. UDP and SYN do not enter this path.
+Tests inject exchanges into `collect_rpc` and use in-memory streams for record
+reading; no test here validates a live RPC server. Service enumeration, NFS, and
+RPC on other ports remain outside the initial scope. See
+[RPC learning notes](rpc-identification.md).
 
 The SMTP parser first checks for an exact uppercase `SMTP` or `ESMTP` whitespace token, then requires a `220 ` or `220-` greeting prefix. It searches the remaining tokens for `Postfix` or `Exim`; the immediately following token is retained as a version only when it starts with an ASCII digit and contains ASCII alphanumeric characters, dots, hyphens, or underscores. Product and version are optional, so an unknown implementation still receives an `smtp` label. The same logic applies on nonstandard ports and is covered by in-memory fixtures.
 
@@ -207,6 +227,11 @@ callbacks use the socket readiness helpers. Raw behavior has not been live-teste
 ICMP error interpretation, IPv6 SYN, retransmissions, and application probes in
 SYN mode are outside this implementation. Per-probe raw sockets and memory use
 still need evaluation before high-concurrency production use.
+
+The parsed peer TCP sequence number is retained for diagnostics and parser
+tests. It has a field-level dead-code allowance because production matching
+and cleanup currently use the acknowledgment number instead. The entire SYN
+model module is no longer exempt from dead-code checking.
 
 Host discovery, other raw-packet scan methods, full service fingerprinting, and
 exploit execution remain outside the current implementation. See [usage](usage.md),

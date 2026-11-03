@@ -4,9 +4,22 @@ The current source automatically probes HTTP on confirmed-open TCP ports 80, 800
 8080, and 8888, and HTTPS on ports 443 and 8443. Product, version, and a simple parenthesized comment from the
 `Server` header are stored separately. No extra identification flag is required.
 
-RPC candidate, validation, mapping, and result-handling helpers are available
-for offline development. They do not yet send RPC probes during CLI scans;
-port 111 retains passive banner reads. See [RPC learning notes](rpc-identification.md).
+Confirmed-open TCP port 111 automatically receives a portmapper v2 NULL probe.
+A validated successful reply supplies the `rpcbind` label and protocol details;
+software product and version remain unknown. No extra flag is required. The
+RPC exchange shares one `--timeout-ms` deadline across connect/write/read and
+limits the assembled reply to 4096 bytes. Identification failure leaves the
+initial open-port result intact. UDP and SYN modes do not perform this probe.
+See [RPC learning notes](rpc-identification.md).
+
+Example command for a lab host you are authorized to assess:
+
+```bash
+rmap --tcp --target 192.0.2.10 --ports 111 --timeout-ms 1000
+```
+
+This command has not been run as part of offline validation; it is not an
+example of a measured finding.
 
 Build with stable Rust supporting edition 2024:
 
@@ -25,7 +38,7 @@ rmap --help
 Cargo's installation directory, usually `~/.cargo/bin`, must be on `PATH`. Reinstall after source changes when invoking the installed `rmap`; building the project alone does not update that executable.
 
 After installation, `rmap --help` prints the startup banner with version
-`v0.5.1` without starting a scan. The same check can be made directly with
+`v0.5.2` without starting a scan. The same check can be made directly with
 `./target/release/rmap --help`.
 
 ## Select TCP connect, TCP SYN, or UDP

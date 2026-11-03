@@ -3,8 +3,6 @@
 pub mod progress;
 pub mod report;
 pub mod service_information;
-// Parsed reply fields include values retained for future protocol diagnostics.
-#[allow(dead_code)]
 pub mod syn;
 
 use self::service_information::ServiceInformation;

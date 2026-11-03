@@ -1,5 +1,6 @@
-//! One TCP connection attempt with optional passive banner or HTTP probing.
+//! One TCP connection attempt with passive banners or HTTP, HTTPS, and RPC probes.
 
+use std::future::Future;
 use std::io::ErrorKind;
 use std::net::SocketAddr;
 
@@ -36,6 +37,13 @@ pub(super) async fn scan_port(target: SocketAddr, timeout: Duration) -> ScanResu
             if http::is_http_candidate(target.port()) || http::is_https_candidate(target.port()) {
                 drop(stream);
                 apply_http_probe_result(&mut result, http::probe(target, timeout).await);
+            } else if rpc::is_rpc_candidate(target.port()) {
+                // Keep only one connection per task, as required by descriptor budgeting.
+                drop(stream);
+                collect_rpc(&mut result, timeout, |_xid, _deadline, _limit| {
+                    rpc::probe(target, _xid, _deadline, _limit)
+                })
+                .await;
             } else {
                 let (observation, banner) = read_banner(stream, timeout).await;
                 result.observation = Some(observation);
@@ -79,9 +87,35 @@ fn apply_http_probe_result(
     }
 }
 
+/// Run the selected exchange separately from connection measurement and result mapping.
+async fn collect_rpc<F, Fut>(_result: &mut ScanResult, _timeout: Duration, _probe: F)
+where
+    F: FnOnce(u32, Deadline, usize) -> Fut,
+    Fut: Future<Output = Result<Vec<u8>, String>>,
+{
+    if _result.transport != ScanMode::Tcp
+        || _result.status != PortStatus::Open
+        || !rpc::is_rpc_candidate(_result.port)
+    {
+        return;
+    }
+    let _deadline = Deadline::now() + _timeout;
+    let _xid = match getrandom::u32() {
+        Ok(_xid) => _xid,
+        Err(_error) => {
+            apply_rpc_probe_result(
+                _result,
+                Err(format!("Failed to generate RPC transaction ID: {_error}")),
+                0, // No response is validated on this error path.
+            );
+            return;
+        }
+    };
+    let _response = _probe(_xid, _deadline, rpc::MAX_REPLY_BYTES).await;
+    apply_rpc_probe_result(_result, _response.as_deref().map_err(String::clone), _xid);
+}
+
 /// Apply a completed RPC exchange without changing measured connection evidence.
-/// The network probe will call this once TCP record reading is implemented.
-#[allow(dead_code)] // Integration boundary; no RPC network exchange is implemented yet.
 fn apply_rpc_probe_result(
     _result: &mut ScanResult,
     _response: Result<&[u8], String>,

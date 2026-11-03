@@ -1,4 +1,6 @@
-use super::{apply_http_probe_result, apply_rpc_probe_result, banner_result, read_banner};
+use super::{
+    apply_http_probe_result, apply_rpc_probe_result, banner_result, collect_rpc, read_banner,
+};
 use crate::model::{PortStatus, ScanMode, ScanResult};
 use std::io;
 use std::pin::Pin;
@@ -112,6 +114,104 @@ fn http_probe_failure_preserves_the_open_port_without_inventing_a_service() {
 const RPC_REPLY: [u8; 24] = [
     0x12, 0x34, 0x56, 0x78, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 ];
+
+#[tokio::test]
+async fn rpc_collection_uses_one_xid_deadline_and_reply_limit_then_maps_the_reply() {
+    let mut result = measured_open_tcp_port(111);
+    let timeout = Duration::from_secs(1);
+    let before = tokio::time::Instant::now();
+    collect_rpc(&mut result, timeout, |xid, deadline, limit| {
+        assert!(deadline >= before + timeout);
+        assert!(deadline <= tokio::time::Instant::now() + timeout);
+        assert_eq!(limit, 4096);
+        async move {
+            let mut reply = RPC_REPLY.to_vec();
+            reply[..4].copy_from_slice(&xid.to_be_bytes());
+            Ok(reply)
+        }
+    })
+    .await;
+    assert_eq!(result.status, PortStatus::Open);
+    assert_eq!(result.service.as_deref(), Some("rpcbind"));
+    assert_eq!(result.elapsed, Duration::from_millis(17));
+    assert!(result.error.is_none());
+    assert!(result.banner.is_none());
+    assert!(
+        result
+            .service_information
+            .as_ref()
+            .unwrap()
+            .version
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn rpc_collection_preserves_open_measurements_when_the_exchange_fails() {
+    let mut result = measured_open_tcp_port(111);
+    collect_rpc(&mut result, Duration::from_secs(1), |_, _, _| async {
+        Err("RPC connection failed: fixture refusal".into())
+    })
+    .await;
+    assert_eq!(result.status, PortStatus::Open);
+    assert_eq!(result.elapsed, Duration::from_millis(17));
+    assert!(result.error.is_none());
+    assert!(result.service.is_none());
+    assert!(result.service_information.is_none());
+    assert_eq!(
+        result.observation.as_deref(),
+        Some("RPC probe failed: RPC connection failed: fixture refusal")
+    );
+}
+
+#[tokio::test]
+async fn rpc_collection_rejects_a_reply_with_the_wrong_request_xid() {
+    let mut result = measured_open_tcp_port(111);
+    collect_rpc(
+        &mut result,
+        Duration::from_secs(1),
+        |xid, _, _| async move {
+            let mut reply = RPC_REPLY.to_vec();
+            reply[..4].copy_from_slice(&xid.wrapping_add(1).to_be_bytes());
+            Ok(reply)
+        },
+    )
+    .await;
+    assert_eq!(result.status, PortStatus::Open);
+    assert!(result.service.is_none());
+    assert!(
+        result
+            .observation
+            .as_deref()
+            .unwrap()
+            .contains("transaction ID does not match")
+    );
+}
+
+#[tokio::test]
+async fn rpc_collection_does_not_call_the_exchange_for_other_ports_states_or_modes() {
+    for (port, transport, status) in [
+        (80, ScanMode::Tcp, PortStatus::Open),
+        (2049, ScanMode::Tcp, PortStatus::Open),
+        (111, ScanMode::Udp, PortStatus::Open),
+        (111, ScanMode::Syn, PortStatus::Open),
+        (111, ScanMode::Tcp, PortStatus::Closed),
+        (111, ScanMode::Tcp, PortStatus::Filtered),
+        (111, ScanMode::Tcp, PortStatus::Unknown),
+    ] {
+        let mut result = measured_open_tcp_port(port);
+        result.transport = transport;
+        result.status = status;
+        collect_rpc(&mut result, Duration::from_secs(1), |_, _, _| async {
+            panic!("RPC exchange must not run for this result")
+        })
+        .await;
+        assert_eq!(result.transport, transport);
+        assert_eq!(result.status, status);
+        assert!(result.service.is_none());
+        assert!(result.observation.is_none());
+    }
+}
 
 #[test]
 fn rpc_reply_reaches_scan_results_without_changing_connection_evidence() {

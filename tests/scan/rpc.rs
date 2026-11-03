@@ -1,8 +1,14 @@
 use super::{
     append_u32, build_portmapper_null_call, decode_record_marker, frame_rpc_record,
-    is_rpc_candidate, read_u32, record_marker, response_information, skip_rpc_verifier,
-    validate_portmapper_null_reply, validate_rpc_reply_header,
+    is_rpc_candidate, probe, read_rpc_record, read_u32, record_marker, response_information,
+    skip_rpc_verifier, validate_portmapper_null_reply, validate_rpc_reply_header,
 };
+
+use std::pin::Pin;
+use std::task::{Context, Poll};
+use std::time::Duration;
+use tokio::io::{AsyncRead, AsyncWriteExt, ReadBuf};
+use tokio::time::Instant;
 
 // Independent accepted-reply header: XID 0x12345678, REPLY, MSG_ACCEPTED.
 const ACCEPTED_REPLY_HEADER: [u8; 12] = [0x12, 0x34, 0x56, 0x78, 0, 0, 0, 1, 0, 0, 0, 0];
@@ -16,6 +22,140 @@ const NULL_REPLY: [u8; 24] = [
     0, 0, 0, 0, // Verifier body length.
     0, 0, 0, 0, // SUCCESS.
 ];
+
+// An in-memory reader that deliberately returns at most one byte per read.
+struct OneByteReads<'a>(&'a [u8]);
+
+impl AsyncRead for OneByteReads<'_> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        buffer: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        if buffer.remaining() > 0
+            && let Some((&byte, rest)) = self.0.split_first()
+        {
+            buffer.put_slice(&[byte]);
+            self.0 = rest;
+        }
+        Poll::Ready(Ok(()))
+    }
+}
+
+#[tokio::test]
+async fn expired_probe_deadline_returns_before_attempting_a_connection() {
+    // The expired deadline must trigger the guard before TcpStream::connect.
+    let target = "192.0.2.1:111".parse().unwrap();
+    let result = probe(target, 0x12345678, Instant::now(), 4096).await;
+    assert_eq!(result, Err("RPC connection timed out".to_string()));
+}
+
+#[tokio::test]
+async fn reads_one_record_without_consuming_the_following_record() {
+    let mut wire = vec![0x80, 0, 0, 24];
+    wire.extend_from_slice(&NULL_REPLY);
+    wire.extend_from_slice(&[0x80, 0, 0, 0]);
+    let mut reader = wire.as_slice();
+    let payload = read_rpc_record(&mut reader, Instant::now() + Duration::from_secs(1), 24)
+        .await
+        .unwrap();
+    assert_eq!(payload, NULL_REPLY);
+    assert_eq!(reader, &[0x80, 0, 0, 0]);
+    assert!(response_information(&payload, 0x12345678).is_ok());
+}
+
+#[tokio::test]
+async fn assembles_fragments_across_short_reads_and_empty_nonfinal_fragments() {
+    let mut wire = vec![0, 0, 0, 0, 0, 0, 0, 10];
+    wire.extend_from_slice(&NULL_REPLY[..10]);
+    wire.extend_from_slice(&[0, 0, 0, 0, 0x80, 0, 0, 14]);
+    wire.extend_from_slice(&NULL_REPLY[10..]);
+    let mut reader = OneByteReads(&wire);
+    let payload = read_rpc_record(&mut reader, Instant::now() + Duration::from_secs(1), 24)
+        .await
+        .unwrap();
+    assert_eq!(payload, NULL_REPLY);
+    assert!(reader.0.is_empty());
+}
+
+#[tokio::test]
+async fn accepts_a_zero_length_final_record_with_a_zero_byte_limit() {
+    let mut reader = &[0x80, 0, 0, 0][..];
+    assert_eq!(
+        read_rpc_record(&mut reader, Instant::now() + Duration::from_secs(1), 0).await,
+        Ok(Vec::new())
+    );
+}
+
+#[tokio::test]
+async fn rejects_premature_eof_in_markers_and_fragment_payloads() {
+    for length in 0..4 {
+        let mut reader = &[0x80, 0, 0, 24][..length];
+        let error = read_rpc_record(&mut reader, Instant::now() + Duration::from_secs(1), 24)
+            .await
+            .unwrap_err();
+        assert!(error.contains("Failed to read RPC record marker"));
+    }
+    for length in 0..NULL_REPLY.len() {
+        let mut wire = vec![0x80, 0, 0, 24];
+        wire.extend_from_slice(&NULL_REPLY[..length]);
+        let mut reader = wire.as_slice();
+        let error = read_rpc_record(&mut reader, Instant::now() + Duration::from_secs(1), 24)
+            .await
+            .unwrap_err();
+        assert!(error.contains("Failed to read RPC fragment"));
+    }
+}
+
+#[tokio::test]
+async fn rejects_oversized_fragments_before_reading_or_allocating_their_payload() {
+    // The maximum representable length must fail the limit check, not attempt a huge read.
+    let mut reader = &[0xff, 0xff, 0xff, 0xff][..];
+    let error = read_rpc_record(&mut reader, Instant::now() + Duration::from_secs(1), 24)
+        .await
+        .unwrap_err();
+    assert!(error.contains("maximum allowed payload of 24 bytes"));
+
+    let mut reader = &[0, 0, 0, 2, 0xaa, 0xbb, 0x80, 0, 0, 3, 0xcc, 0xdd, 0xee][..];
+    let error = read_rpc_record(&mut reader, Instant::now() + Duration::from_secs(1), 4)
+        .await
+        .unwrap_err();
+    assert!(error.contains("maximum allowed payload of 4 bytes"));
+    assert_eq!(reader, &[0xcc, 0xdd, 0xee]);
+}
+
+#[tokio::test]
+async fn rejects_an_expired_deadline_even_when_empty_fragments_are_ready() {
+    let bytes = [0, 0, 0, 0, 0x80, 0, 0, 0];
+    let mut reader = bytes.as_slice();
+    let error = read_rpc_record(&mut reader, Instant::now(), 24)
+        .await
+        .unwrap_err();
+    assert!(error.contains("timed out"));
+    assert_eq!(reader, bytes.as_slice());
+}
+
+#[tokio::test]
+async fn times_out_when_a_marker_is_incomplete_but_the_stream_stays_open() {
+    let (mut reader, mut writer) = tokio::io::duplex(16);
+    writer.write_all(&[0x80, 0]).await.unwrap();
+    let error = read_rpc_record(&mut reader, Instant::now() + Duration::from_millis(20), 24)
+        .await
+        .unwrap_err();
+    assert!(error.contains("RPC record reading timed out"));
+    drop(writer);
+}
+
+#[tokio::test]
+async fn times_out_when_a_fragment_is_incomplete_but_the_stream_stays_open() {
+    let (mut reader, mut writer) = tokio::io::duplex(16);
+    writer.write_all(&[0x80, 0, 0, 3, 0xaa]).await.unwrap();
+    let error = read_rpc_record(&mut reader, Instant::now() + Duration::from_millis(20), 24)
+        .await
+        .unwrap_err();
+    assert!(error.contains("RPC fragment reading timed out"));
+    drop(writer);
+}
 
 #[test]
 fn decodes_record_markers_in_network_byte_order_and_separates_the_final_flag() {
