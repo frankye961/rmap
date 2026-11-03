@@ -15,6 +15,8 @@ pub struct ParsedIpv4Packet<'a> {
 pub struct TcpReply {
     pub source_port: u16,
     pub destination_port: u16,
+    // Preserve the peer's parsed sequence number for diagnostics and parser tests.
+    #[allow(dead_code)]
     pub sequence_number: u32,
     pub acknowledgment_number: u32,
     pub flags: u8,

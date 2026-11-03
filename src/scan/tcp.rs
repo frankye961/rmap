@@ -1,5 +1,6 @@
-//! One TCP connection attempt with optional passive banner or HTTP probing.
+//! One TCP connection attempt with passive banners or HTTP, HTTPS, and RPC probes.
 
+use std::future::Future;
 use std::io::ErrorKind;
 use std::net::SocketAddr;
 
@@ -8,7 +9,7 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::net::TcpStream;
 use tokio::time::{Instant as Deadline, timeout_at};
 
-use super::{http, identify};
+use super::{http, identify, rpc};
 use crate::mapper::service_information::apply_service_information;
 use crate::model::service_information::ServiceInformation;
 use crate::model::{PortStatus, ScanMode, ScanResult};
@@ -36,6 +37,13 @@ pub(super) async fn scan_port(target: SocketAddr, timeout: Duration) -> ScanResu
             if http::is_http_candidate(target.port()) || http::is_https_candidate(target.port()) {
                 drop(stream);
                 apply_http_probe_result(&mut result, http::probe(target, timeout).await);
+            } else if rpc::is_rpc_candidate(target.port()) {
+                // Keep only one connection per task, as required by descriptor budgeting.
+                drop(stream);
+                collect_rpc(&mut result, timeout, |_xid, _deadline, _limit| {
+                    rpc::probe(target, _xid, _deadline, _limit)
+                })
+                .await;
             } else {
                 let (observation, banner) = read_banner(stream, timeout).await;
                 result.observation = Some(observation);
@@ -76,6 +84,71 @@ fn apply_http_probe_result(
             result.observation = observation;
         }
         Err(error) => result.observation = Some(format!("HTTP probe failed: {error}")),
+    }
+}
+
+/// Run the selected exchange separately from connection measurement and result mapping.
+async fn collect_rpc<F, Fut>(_result: &mut ScanResult, _timeout: Duration, _probe: F)
+where
+    F: FnOnce(u32, Deadline, usize) -> Fut,
+    Fut: Future<Output = Result<Vec<u8>, String>>,
+{
+    if _result.transport != ScanMode::Tcp
+        || _result.status != PortStatus::Open
+        || !rpc::is_rpc_candidate(_result.port)
+    {
+        return;
+    }
+    let _deadline = Deadline::now() + _timeout;
+    let _xid = match getrandom::u32() {
+        Ok(_xid) => _xid,
+        Err(_error) => {
+            apply_rpc_probe_result(
+                _result,
+                Err(format!("Failed to generate RPC transaction ID: {_error}")),
+                0, // No response is validated on this error path.
+            );
+            return;
+        }
+    };
+    let _response = _probe(_xid, _deadline, rpc::MAX_REPLY_BYTES).await;
+    apply_rpc_probe_result(_result, _response.as_deref().map_err(String::clone), _xid);
+}
+
+/// Apply a completed RPC exchange without changing measured connection evidence.
+fn apply_rpc_probe_result(
+    _result: &mut ScanResult,
+    _response: Result<&[u8], String>,
+    _expected_xid: u32,
+) {
+    if _result.transport != ScanMode::Tcp
+        || _result.status != PortStatus::Open
+        || !rpc::is_rpc_candidate(_result.port)
+    {
+        return;
+    }
+
+    let _detail =
+        match _response.and_then(|_reply| rpc::response_information(_reply, _expected_xid)) {
+            Ok(_information) => {
+                let _detail = _information.observation.clone();
+                apply_service_information(_result, _information);
+                _detail
+            }
+            Err(_error) => Some(format!("RPC probe failed: {_error}")),
+        };
+    if let Some(_detail) = _detail {
+        match _result
+            .observation
+            .as_mut()
+            .filter(|_text| !_text.is_empty())
+        {
+            Some(_existing) => {
+                _existing.push_str("; ");
+                _existing.push_str(&_detail);
+            }
+            None => _result.observation = Some(_detail),
+        }
     }
 }
 

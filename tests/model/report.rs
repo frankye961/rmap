@@ -4,6 +4,32 @@ use super::format_result;
 use crate::model::{PortStatus, ScanMode, ScanResult};
 
 #[test]
+fn displays_mapped_rpc_information_without_a_fabricated_software_version() {
+    let information = crate::mapper::service_information::map_portmapper_service();
+    let mut result = ScanResult {
+        port: 111,
+        transport: ScanMode::Tcp,
+        status: PortStatus::Open,
+        service: None,
+        elapsed: Duration::from_millis(17),
+        error: None,
+        observation: information.observation.clone(),
+        banner: None,
+        service_information: None,
+    };
+    crate::mapper::service_information::apply_service_information(&mut result, information);
+    let line = format_result(&result);
+    assert!(line.starts_with("111/tcp"));
+    assert!(line.contains("open"));
+    assert!(line.contains("rpcbind"));
+    assert!(line.contains("17.00 ms"));
+    assert!(line.contains("portmapper protocol version 2"));
+    let information = result.service_information.as_ref().unwrap();
+    assert!(information.product.is_none());
+    assert!(information.version.is_none());
+}
+
+#[test]
 fn syn_cleanup_diagnostic_is_visible_without_erasing_the_open_state() {
     let result = crate::mapper::syn::map_syn_result(
         "192.0.2.21:80".parse().unwrap(),

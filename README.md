@@ -1,25 +1,40 @@
 # rmap (ALPHA version)
 
-Current version: **0.5.1**.
+Current version: **0.5.2**.
 
-## Version 0.5.1: automatic HTTP service identification
+rmap is my research project in networking and cybersecurity. It began as a way
+to learn Rust and network programming and has grown into a network scanner
+inspired by Nmap, with optional AI-assisted interpretation. I use it to explore
+how connectivity and service observations are collected, validated, and explained,
+including where the evidence is incomplete or uncertain.
 
-TCP connect scans automatically send bounded HTTP `HEAD` probes on confirmed-open
-ports 80, 8000, 8080, and 8888. A valid response identifies HTTP; its original
-`Server` header supplies a product, optional version, and one optional
-parenthesized comment in structured scan results. For example,
-`Apache/2.4.68 (Debian)` yields `Apache`, `2.4.68`, and comment `Debian`.
-The console keeps the existing escaped `Server:` preview, and missing or
-unsupported headers leave software fields unknown. HTTP probe failure preserves
-the measured open state.
+Measured results stay separate from AI conclusions. An open port, a self-reported
+banner, or a possible CVE match supports a specific observation; each has limits
+that matter when drawing security conclusions. Reproducible lab experiments and
+explicit uncertainty are central to the project's research direction.
 
-This release has 134 passing offline tests, including header parsing and scanner
-result integration. Live HTTP probing has not been validated by the assistant.
-RPC/NFS, SMB, OS detection, and application probing after SYN discovery remain
-later work. No dependencies were added for this release. The HTTPS extension
-below is subsequent development work.
+The longer-term assessment direction includes observations from different source
+positions, explicit segmentation policies, and comparisons before and after
+remediation. Those assessment features are planned; the current application
+provides the scanning and service-identification foundation. See
+[research goals and experiment guidance](docs/research.md).
 
-## Current development: HTTPS identification
+## Version 0.5.2: bounded RPC identification
+
+- Automatic TCP portmapper v2 NULL probing on confirmed-open port 111, with
+  validated `rpcbind` identification and no guessed software version.
+- One deadline for the RPC connection, request write, and fragmented reply;
+  a 4096-byte assembled-reply limit and checks before fragment allocation.
+- HTTP and HTTPS identification using bounded `HEAD` requests and structured
+  `Server` header parsing, alongside existing SSH, FTP, and SMTP recognition.
+- Cleanup of RPC scaffolding comments, removal of obsolete lint suppression, and updated
+  learning and research documentation. No dependencies were added.
+
+Offline tests cover parsing, framing, timeouts, result preservation, and the
+scanner integration. Live RPC and TLS behavior still require controlled-lab
+validation; the tests do not establish real-world scan accuracy or performance.
+
+## HTTPS identification
 
 TCP connect scans now also select HTTPS probes for confirmed-open ports 443 and
 8443. A successful HTTP response over TLS supplies the `https` service label;
@@ -32,32 +47,51 @@ scanning an IP address with a certificate issued for a hostname. Probe failure
 preserves the open-port measurement. There is no certificate bypass, automatic
 plaintext fallback, or TLS certificate inventory in this implementation.
 
-The current suite has 140 passing offline tests, including HTTPS request
-selection, response labels, and scan-result integration. Real TLS handshakes,
+The HTTPS extension added six offline tests covering request selection, response
+labels, and scan-result integration. Real TLS handshakes,
 certificate failures, and live HTTPS servers have not been validated here.
 See [HTTPS identification and learning notes](docs/https-identification.md).
 
-## Version 0.5.0 milestone: TCP SYN scanning
+## TCP RPC identification
 
-The basic IPv4 SYN pipeline is now connected end to end: construct a SYN, send
-through a nonblocking Linux raw socket, validate and match replies, classify
-open/closed ports, perform bounded reset cleanup, and report measured TCP results.
-Malformed or unrelated traffic does not end a probe or extend its deadline.
+RPC work now includes request encoding, TCP record construction, NULL-reply
+validation, and candidate selection for TCP port 111. A completed, validated
+portmapper v2 NULL reply maps to `rpcbind` using the existing service mapper.
+The observation records program 100000 and protocol version 2; software product
+and version remain unknown. A port number alone never establishes this identity.
 
-The implementation is split into small modules under `src/scan/syn/`: orchestration,
-packet bytes, reply processing, and socket I/O. Offline tests cover the parsing
-and result flow, including cleanup failures that preserve open ports. This milestone
-does not claim live raw-packet validation or production readiness at high concurrency.
+The TCP result handler accepts completed exchange results, retains connection
+measurements and passive banner bytes, and appends RPC diagnostics without
+discarding existing observations. Probe failures preserve the open state and
+any earlier service identification. Offline tests cover this path and console
+formatting.
 
-`rmap` aims to be a network scanner inspired by Nmap, written in Rust and extended with AI interpretation. Its goal is to find and describe exposed services, then help a user understand what observed service versions might mean, including possible CVE leads. Scan measurements and AI conclusions stay separate so the tool can show what it observed without presenting a model's guess as a fact.
+TCP connect scans now automatically send the portmapper v2 NULL probe on
+confirmed-open port 111. The initial connection is closed before the separate
+RPC exchange, keeping one live TCP connection per task. Each request uses a
+random XID; connecting, writing the complete frame, and reading all fragments
+share one identification deadline derived from `--timeout-ms`. The assembled
+reply is limited to 4096 bytes, checked before allocating each fragment.
 
-The current implementation accepts individual IPv4 addresses, target lists, and CIDR subnets. It scans each unique host once using TCP connect, IPv4 TCP SYN, or UDP probes. TCP connect mode collects limited banners and automatically probes HTTP on ports 80, 8000, 8080, and 8888, and HTTPS on ports 443 and 8443. Optional DeepSeek interpretation can research public CVEs and exploit references using a web search tool. It does not yet offer Nmap's range of scan methods, host discovery, broad service fingerprinting, or exhaustive vulnerability detection. Building it is also a way to learn Rust networking, I/O, timeouts, and error handling.
+Other non-HTTP/HTTPS TCP ports retain passive banner collection. RPC probing adds
+no flag or dependency and does not run in UDP or SYN mode. Registered-service
+enumeration and NFS identification remain later work. This implementation has
+offline tests; no live RPC validation has been performed by the assistant.
+See [RPC identification and learning notes](docs/rpc-identification.md).
+
+The current application accepts individual IPv4 addresses, target lists, and CIDR
+subnets. It scans each unique host once using TCP connect, IPv4 TCP SYN, or UDP
+probes. TCP connect mode collects limited banners and selects HTTP, HTTPS, and
+RPC probes on supported candidate ports. Optional DeepSeek interpretation can
+research public CVEs and exploit references using a web search tool. Host
+discovery, broader service fingerprinting, OS detection, and additional scan
+methods remain future work.
 
 ## How a run works
 
 1. The CLI validates every entry in the required IPv4 target list and any supplied options, then removes duplicate targets while retaining their first occurrence. Omitted options default to TCP, all ports from 1 through 65535, a timeout of 1000 ms, and up to 256 concurrent probes.
 2. Hosts are processed one at a time. For each host, the common scanner entry point schedules the selected mode through bounded Tokio tasks on a shared runtime. UDP sends empty datagrams, TCP connect attempts normal connections, and SYN mode sends raw TCP SYN packets. Each mode records its measured outcomes in `ScanResult` values.
-3. In TCP connect mode, confirmed-open HTTP candidate ports (80, 8000, 8080, 8888) and HTTPS candidates (443, 8443) get a separate `HEAD` probe using the corresponding scheme; other open ports receive passive banner reads. A valid response supplies structured service information. SYN mode sends a raw TCP SYN and validates response checksums, reversed endpoints, flags, and acknowledgment. It does not collect application banners.
+3. In TCP connect mode, confirmed-open HTTP candidate ports (80, 8000, 8080, 8888) and HTTPS candidates (443, 8443) get a separate `HEAD` probe using the corresponding scheme. Open TCP port 111 gets a bounded portmapper NULL probe; other open ports receive passive banner reads. A validated response supplies structured service information. SYN mode sends a raw TCP SYN and validates response checksums, reversed endpoints, flags, and acknowledgment. It does not collect application banners.
 4. Progress is reported on stderr while ports are scanned. Each host’s measured table prints after its scan and before its optional AI research. Full-range scans and `--ports` lists containing ranges show only confirmed open ports; lists of individual ports show every selected outcome. AI configuration is validated before scanning; configuration errors disable the AI step without stopping the scan.
 5. With `--ai`, the program sends bounded observations for the current host to DeepSeek through Rig before moving to the next host. With a Brave Search key configured, the agent researches CVEs, vendor and distribution advisories, and Exploit-DB references using a public web search tool. An optional local advisory file can supplement the web evidence. Interpretation and retrieved source links appear separately from measurements. AI or search failures leave the scan report visible.
 
@@ -252,7 +286,7 @@ unidentified service as `-`, even when the port is confirmed open.
 
 ## Understanding scan results
 
-Each report row includes the port, connection state, an optional service label, the elapsed time, and a detail. For TCP, elapsed time measures the initial connection attempt and excludes later banner reads or HTTP probes. For UDP, it measures socket setup, sending, and waiting for a response.
+Each report row includes the port, connection state, an optional service label, the elapsed time, and a detail. For TCP, elapsed time measures the initial connection attempt and excludes later banner reads or HTTP/HTTPS/RPC probes. For UDP, it measures socket setup, sending, and waiting for a response.
 
 | State | What it means here |
 | --- | --- |
@@ -563,6 +597,7 @@ src/
 │   ├── tcp.rs          TCP connections, outcomes, and passive banners
 │   ├── identify.rs     SSH, HTTP, FTP, and SMTP banner identification
 │   ├── udp.rs          UDP probes and outcome classification
+│   ├── rpc.rs          Bounded portmapper exchange, record framing, and validation
 │   └── http.rs         HTTP/HTTPS candidates, HEAD probes, and header extraction
 ├── model/
 │   ├── mod.rs          Scan results, preserved banner bytes, and AI data

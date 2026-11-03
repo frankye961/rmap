@@ -10,11 +10,11 @@ socket setup, packet construction, checksums, asynchronous sending, receiving,
 and reply parsing, validation, and classification.
 The earlier TCP scanner and banner grabbing are explained briefly for context.
 
-Version 0.5.1 adds automatic HTTP probing on TCP connect ports 80, 8000, 8080,
-and 8888, including structured product/version and simple comment parsing.
-That application identification is separate from the SYN scanner covered here.
-The current HTTP module also supports HTTPS candidates 443 and 8443; see
-[HTTPS identification](https-identification.md) for the request and result flow.
+Version 0.5.2 includes automatic HTTP probing on TCP connect ports 80, 8000,
+8080, and 8888, HTTPS probing on 443 and 8443, and a portmapper NULL probe on
+111. This application identification is separate from the SYN scanner covered
+here. See [HTTPS identification](https-identification.md) and
+[RPC identification](rpc-identification.md) for those request and result flows.
 
 ## Contents
 
