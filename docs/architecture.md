@@ -11,6 +11,9 @@ optional AI interpretation. Planned assessment context, connectivity-policy
 evaluation, and cross-run comparison will build on these boundaries; they are
 not implemented in this release. See [research direction](research.md).
 
+Current development extends the same TCP connect identification path to HTTPS
+on ports 443 and 8443, without adding application probes to SYN mode.
+
 rmap is a Rust network scanner inspired by Nmap, with optional AI research into observed services, possible CVEs, and public exploit references. It scans selected ports concurrently through bounded Tokio tasks for each unique IPv4 target using TCP connect, raw TCP SYN, or empty UDP probes. Hosts are processed sequentially.
 
 ## Flow through the application
