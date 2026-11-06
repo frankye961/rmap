@@ -17,6 +17,10 @@ is separate from the SYN scanner covered here. See
 [HTTPS identification](https-identification.md) and
 [RPC identification](rpc-identification.md) for those request and result flows.
 
+Current NFSv3 development adds a NULL probe on selected open TCP port 2049.
+It shares the RPC exchange and also remains separate from SYN scanning. See
+[NFS identification and learning notes](nfs-identification.md).
+
 ## Contents
 
 1. [Current state and overall flow](#1-current-state-and-overall-flow)
