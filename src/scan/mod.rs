@@ -10,6 +10,9 @@ mod identify;
 mod nfs;
 mod resources;
 mod rpc;
+// Type-check the learning scaffold without enabling SMB probes in normal scans.
+#[cfg(test)]
+mod smb;
 mod syn;
 mod tcp;
 mod udp;
