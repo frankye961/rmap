@@ -4,6 +4,9 @@ pub mod progress;
 pub mod report;
 pub mod rpc;
 pub mod service_information;
+pub mod smb_2_header;
+pub mod smb_2_request;
+pub mod smb_2_request_body;
 pub mod syn;
 
 use self::rpc::RpcMapping;

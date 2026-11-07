@@ -12,7 +12,7 @@ an open port nor an AI-generated CVE candidate establishes exploitability.
 
 ## Current experimental foundation
 
-Version 0.5.4 provides TCP connect, UDP, and Linux IPv4 SYN scanning; bounded
+Version 0.5.5 provides TCP connect, UDP, and Linux IPv4 SYN scanning; bounded
 concurrent scheduling; passive banner recognition; HTTP/HTTPS probes; and TCP
 portmapper v2 NULL identification followed by DUMP enumeration. Advertised
 registrations remain separate from measured connectivity. Scan measurements and AI interpretation use
@@ -23,28 +23,34 @@ It also includes [NFSv3 NULL identification](nfs-identification.md) on
 selected, confirmed-open TCP port 2049 using the shared RPC exchange. Its live
 behavior remains unverified by the assistant.
 
+[SMB2 negotiation](smb-identification.md) now identifies supported protocol
+dialects on selected, confirmed-open TCP port 445. It preserves connectivity
+measurements when identification fails and does not infer software versions or OS.
+
 These tests establish behavior for their fixtures. They do not measure accuracy
-against real networks, validate live TLS or RPC interoperability, or establish
+against real networks, validate live SMB, TLS, or RPC interoperability, or establish
 performance under high concurrency. The current output is a console report;
 durable assessment records and comparison tooling are future work.
 
 ## Next controlled experiment
 
 Research question: can rmap distinguish an open TCP port from a successfully
-identified RPC service when identification fails?
+identified SMB service when identification fails?
 
 Use a small authorized lab with known service configurations. The following are
 expected conditions and outcomes, not measured findings:
 
-| Known condition on TCP port 111 | Expected result | Limit of the conclusion |
+| Known condition on TCP port 445 | Expected result | Limit of the conclusion |
 | --- | --- | --- |
-| A service answering the portmapper v2 NULL call | Open, with `rpcbind` and protocol version 2 in the detail | The response does not identify daemon software or prove authentication |
-| A listening service returning malformed RPC bytes | Open, with an identification diagnostic and unknown service | A parser rejection does not establish absence of every RPC implementation |
-| A listening service accepting connections but staying silent | Open, with an RPC read timeout and unknown service | Silence does not establish a service identity |
-| No listener, with an explicit TCP refusal | Closed, without an RPC probe | Rejection alone does not identify its network or host cause |
+| A service accepting an offered SMB 2.0.2/2.1 dialect | Open, with `smb` and the selected dialect | The response does not identify server software, OS, or authorization |
+| A listening service returning malformed SMB bytes | Open, with an identification diagnostic and unknown service | Rejection does not establish absence of every SMB implementation |
+| An SMB server requiring a dialect outside the offered set | Open, with an identification diagnostic | The initial probe does not negotiate SMB3 or SMB1 |
+| A listening service accepting connections but staying silent | Open, with an SMB read timeout and unknown service | Silence does not establish a service identity |
+| No listener, with an explicit TCP refusal | Closed, without an SMB probe | Rejection alone does not identify its network or host cause |
 
 Retain the initial connection observation and inspect a packet capture to check
-that the reply XID matches the request. Record identification failures separately
+that the reply message ID matches the request and framing lengths agree with the
+captured payload. Record identification failures separately
 from port state. The initial connection and the later RPC probe use different
 connections, so a service or path can change between them.
 
@@ -78,5 +84,5 @@ rmap's existing application and scanning engine:
 
 These are planned capabilities. The current release does not implement policy
 input, run-context records, record export/import, cross-position comparison, or
-remediation comparison. Broader NFS support, SMB identification, OS detection,
+remediation comparison. Broader NFS and SMB support, OS detection,
 and additional scan techniques are also separate future development choices.

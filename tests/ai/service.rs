@@ -4,6 +4,32 @@ use rig::http_client::Error as HttpError;
 use super::describe_ai_error;
 
 #[test]
+fn includes_smb_dialect_without_inventing_a_software_version_in_ai_context() {
+    use crate::mapper::service_information::map_tcp_service;
+    use crate::model::{PortStatus, ScanMode, ScanResult};
+    use std::time::Duration;
+
+    let detail = "SMB protocol dialect 0x0210 negotiated successfully";
+    let result = ScanResult {
+        port: 445,
+        transport: ScanMode::Tcp,
+        status: PortStatus::Open,
+        service: Some("smb".into()),
+        elapsed: Duration::from_millis(17),
+        error: None,
+        observation: Some(detail.into()),
+        banner: None,
+        service_information: Some(map_tcp_service("smb", None, None, Some(detail))),
+        rpc_mappings: None,
+    };
+    // Construct context only; do not initialize a provider or send an AI request.
+    let prompt = super::build_prompt(&[result], &[]);
+    assert!(prompt.contains("445/tcp: state Open; service label smb"));
+    assert!(prompt.contains("product unknown; version unknown"));
+    assert!(prompt.contains(detail));
+}
+
+#[test]
 fn reports_provider_status_without_echoing_response_text() {
     let error = PromptError::CompletionError(CompletionError::HttpError(
         HttpError::InvalidStatusCodeWithMessage(

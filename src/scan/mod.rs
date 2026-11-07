@@ -10,6 +10,7 @@ mod identify;
 mod nfs;
 mod resources;
 mod rpc;
+mod smb;
 mod syn;
 mod tcp;
 mod udp;
