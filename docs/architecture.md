@@ -1,6 +1,6 @@
 # Architecture
 
-Version **0.5.4** combines bounded TCP NFSv3 identification, portmapper v2
+Version **0.5.5** combines bounded TCP SMB2 and NFSv3 identification, portmapper v2
 identification and DUMP enumeration, HTTP/HTTPS probing, and passive SSH, FTP,
 and SMTP recognition. The
 IPv4 SYN pipeline continues to perform port discovery without application
@@ -31,10 +31,12 @@ flowchart TD
     TCP --> HTTP[http.rs: HEAD probes on open HTTP and HTTPS candidate ports]
     TCP --> RPC[rpc.rs: bounded NULL probe on open TCP port 111]
     TCP --> NFS[nfs.rs: NFSv3 NULL probe on open TCP port 2049]
+    TCP --> SMB[smb.rs: SMB2 NEGOTIATE probe on open TCP port 445]
     TCP --> Results[Structured ScanResult values]
     HTTP --> Results
     RPC --> Results
     NFS --> Results
+    SMB --> Results
     UDP --> Results
     SYN --> Results
     Results --> Report[Measured console report]
@@ -67,11 +69,14 @@ flowchart TD
 | `src/model/syn.rs` | Parsed packet, reply, and original-probe values |
 | `src/mapper/syn.rs` | Map SYN measurements into TCP results |
 | `src/scan/worker.rs` | Schedule bounded async tasks on a shared Tokio runtime, report completions, and restore input order |
-| `src/scan/tcp.rs` | TCP connection measurements, HTTP/HTTPS/portmapper/NFS dispatch, bounded passive reads, and result-preserving identification |
+| `src/scan/tcp.rs` | TCP connection measurements, HTTP/HTTPS/portmapper/NFS/SMB dispatch, bounded passive reads, and result-preserving identification |
 | `src/scan/identify.rs` | Parse supported SSH, HTTP, FTP and SMTP banners into service information |
 | `src/scan/http.rs` | HTTP/HTTPS candidate and request selection, bounded `HEAD` probes, and structured `Server` header extraction |
 | `src/scan/rpc.rs` | Bounded TCP portmapper NULL exchange, record encoding/assembly, reply validation, candidate selection, and validated-response mapping |
 | `src/scan/nfs.rs` | NFSv3 NULL request, bounded shared RPC exchange, candidate selection, and validated `nfs` identification |
+| `src/scan/smb.rs` | Bounded SMB2 negotiation on open TCP port 445, explicit byte encoding, framing, validation, and service information |
+| `src/scan/smb/constants.rs` | Fixed SMB2 field values, dialect codes, response flags, and framing limits |
+| `src/model/smb_2_header.rs`, `smb_2_request_body.rs`, `smb_2_request.rs` | Structured request data, separate from byte encoding and measured service information |
 | `src/scan/udp.rs` | One empty UDP probe, receive timeout, and outcome classification |
 | `src/model/mod.rs` | Shared measured results, transport and status enums, and separate AI data |
 | `src/model/rpc.rs` | Advertised program/version/protocol/port mappings, distinct from measured connectivity |
@@ -233,12 +238,27 @@ connection to selected TCP port 2049, the scanner closes that stream and calls
 reply envelope and requires its result-body cursor to equal the reply length.
 
 `apply_service_probe_result` shares result application and diagnostic handling
-between portmapper NULL and NFS. It uses the existing service mapper, preserves
+between portmapper NULL, NFS, and SMB. It uses the existing service mapper, preserves
 connection evidence, and appends errors without clearing earlier identification.
 Success gives the `nfs` label and protocol version 3 in the observation; software
 product/version remain unknown. No filesystem operation or automatic probe of
 an advertised endpoint is performed. The current NFS path supports only TCP
 port 2049 and NFSv3, and its live behavior remains unverified.
+
+SMB identification runs only on confirmed-open TCP port 445. `collect_service`
+closes the initial stream and calls `collect_smb`. The collector uses message ID
+zero for the fresh connection, a process-wide randomly generated client GUID,
+one identification deadline, and a 4096-byte reply limit. `smb::probe` encodes the
+request, adds Direct TCP framing, connects, writes, and reads one bounded reply.
+`response_information` validates the reply before the shared mapper supplies
+`smb` and a negotiated dialect observation. It offers SMB 2.0.2 and 2.1 only.
+The existing report and optional AI context consume that structured information;
+product, software version, and OS remain unknown. Failures preserve measured
+state and timing, earlier identification, and raw banner bytes. Offline tests
+inject exchanges into `collect_smb` and exercise stream I/O entirely in memory.
+No live SMB interoperability, authentication, or share enumeration is claimed.
+The AI context retains SMB observations only when they fall within its existing
+eight-observation limit. See [SMB learning notes](smb-identification.md).
 
 The SMTP parser first checks for an exact uppercase `SMTP` or `ESMTP` whitespace token, then requires a `220 ` or `220-` greeting prefix. It searches the remaining tokens for `Postfix` or `Exim`; the immediately following token is retained as a version only when it starts with an ASCII digit and contains ASCII alphanumeric characters, dots, hyphens, or underscores. Product and version are optional, so an unknown implementation still receives an `smtp` label. The same logic applies on nonstandard ports and is covered by in-memory fixtures.
 

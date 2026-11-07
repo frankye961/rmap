@@ -1,6 +1,6 @@
 # rmap (ALPHA version)
 
-Current version: **0.5.4**.
+Current version: **0.5.5**.
 
 rmap is my research project in networking and cybersecurity. It began as a way
 to learn Rust and network programming and has grown into a network scanner
@@ -19,27 +19,23 @@ remediation. Those assessment features are planned; the current application
 provides the scanning and service-identification foundation. See
 [research goals and experiment guidance](docs/research.md).
 
-## Version 0.5.4: NFSv3 identification
+## Version 0.5.5: SMB2 identification
 
-- Automatic NFSv3 NULL probing on confirmed-open TCP port 2049, with validated
-  `nfs` identification and an explicit protocol-version description. Failures
-  preserve the open state and existing evidence; software versions stay unknown.
-- Shared RPC request construction for portmapper and NFS, with offline byte-level
-  tests and a dedicated NFS learning guide.
-- Automatic TCP portmapper v2 NULL probing on confirmed-open port 111, with
-  validated `rpcbind` identification and no guessed software version.
-- Automatic DUMP enumeration after successful identification, with at most
-  128 registrations and a separate advertised-endpoint table. Enumeration
-  failures preserve the open state and successful NULL identification.
-- One deadline for the RPC connection, request write, and fragmented reply;
-  a 4096-byte assembled-reply limit and checks before fragment allocation.
-- HTTP and HTTPS identification using bounded `HEAD` requests and structured
-  `Server` header parsing, alongside existing SSH, FTP, and SMTP recognition.
-- Cleanup of RPC scaffolding comments, removal of obsolete lint suppression, and updated
-  learning and research documentation. No dependencies were added.
+- Automatic SMB2 NEGOTIATE probing on confirmed-open TCP port 445, offering
+  dialects 2.0.2 and 2.1 and reporting `smb` only after response validation.
+- Structured request models, explicit byte encoding, and Direct TCP framing.
+- One deadline across connecting, writing, and reading, with a 4096-byte reply
+  limit checked before allocating the payload.
+- Validation of response sizes, command, status, flags, message ID, selected
+  dialect, and security-buffer bounds.
+- Existing open-port measurements and earlier evidence survive probe failures.
+  Negotiated protocol dialects stay separate from unknown software versions.
+- Offline protocol, stream-I/O, scanner, report, and AI-context regression tests,
+  with a dedicated [SMB learning guide](docs/smb-identification.md).
+  No dependencies were added.
 
 Offline tests cover parsing, framing, timeouts, result preservation, and the
-scanner integration. Live NFS, DUMP, and TLS behavior still require controlled-lab
+scanner integration. Live SMB, NFS, DUMP, and TLS behavior still require controlled-lab
 validation; the tests do not establish real-world scan accuracy or performance.
 
 ## HTTPS identification
@@ -81,7 +77,7 @@ random XID; connecting, writing the complete frame, and reading all fragments
 share one identification deadline derived from `--timeout-ms`. The assembled
 reply is limited to 4096 bytes, checked before allocating each fragment.
 
-Other TCP ports retain passive banner collection except the NFSv3 candidate
+Other TCP ports retain passive banner collection except the NFSv3 and SMB2 candidates
 described below. RPC probing adds no flag or dependency and does not run in UDP
 or SYN mode. This implementation has
 offline tests; no live RPC validation has been performed by the assistant.
@@ -115,10 +111,29 @@ port 2049 and NFSv3; NFSv2/v4 and other ports remain later work. It does not mou
 exports or read files. Live NFS behavior has not been validated by the assistant.
 See [NFS identification and learning notes](docs/nfs-identification.md).
 
+## SMB identification
+
+In TCP connect mode, confirmed-open port 445 receives a separate SMB2 NEGOTIATE
+probe offering dialects 2.0.2 and 2.1. A validated reply supplies the `smb` service
+label and negotiated dialect to the normal report and optional AI context
+(when included within its eight-observation limit);
+software product, software version, and OS remain unknown.
+
+The initial connection closes before probing, preserving one live socket per
+task. Connecting, writing, and reading share one identification deadline with a
+4096-byte reply limit. Failures append a diagnostic without changing the measured
+open state or connection time. No authentication, share enumeration, port 139,
+SMB1, or SMB3 negotiation is implemented. Offline tests cover byte encoding,
+framing, malformed responses, timeouts, and scanner integration; live SMB
+interoperability remains unverified. The wire format follows Microsoft's
+[SMB2 negotiation specification](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/77f696b8-9aa0-4ed1-abb2-c097c0ccb05a).
+See [SMB identification and learning notes](docs/smb-identification.md) for the
+function flow, byte layout, error handling, and controlled-lab experiment.
+
 The current application accepts individual IPv4 addresses, target lists, and CIDR
 subnets. It scans each unique host once using TCP connect, IPv4 TCP SYN, or UDP
 probes. TCP connect mode collects limited banners and selects HTTP, HTTPS,
-portmapper, and NFSv3 probes on supported candidate ports. Optional DeepSeek interpretation can
+portmapper, NFSv3, and SMB2 probes on supported candidate ports. Optional DeepSeek interpretation can
 research public CVEs and exploit references using a web search tool. Host
 discovery, broader service fingerprinting, OS detection, and additional scan
 methods remain future work.
@@ -127,7 +142,7 @@ methods remain future work.
 
 1. The CLI validates every entry in the required IPv4 target list and any supplied options, then removes duplicate targets while retaining their first occurrence. Omitted options default to TCP, all ports from 1 through 65535, a timeout of 1000 ms, and up to 256 concurrent probes.
 2. Hosts are processed one at a time. For each host, the common scanner entry point schedules the selected mode through bounded Tokio tasks on a shared runtime. UDP sends empty datagrams, TCP connect attempts normal connections, and SYN mode sends raw TCP SYN packets. Each mode records its measured outcomes in `ScanResult` values.
-3. In TCP connect mode, confirmed-open HTTP candidate ports (80, 8000, 8080, 8888) and HTTPS candidates (443, 8443) get a separate `HEAD` probe using the corresponding scheme. Open TCP port 111 gets portmapper NULL identification followed by DUMP on success; open TCP port 2049 gets an NFSv3 NULL probe. Other open ports receive passive banner reads. A validated response supplies structured service information. SYN mode sends a raw TCP SYN and validates response checksums, reversed endpoints, flags, and acknowledgment. It does not collect application banners.
+3. In TCP connect mode, confirmed-open HTTP candidate ports (80, 8000, 8080, 8888) and HTTPS candidates (443, 8443) get a separate `HEAD` probe using the corresponding scheme. Open TCP port 111 gets portmapper NULL identification followed by DUMP on success; open TCP port 2049 gets an NFSv3 NULL probe; open TCP port 445 gets an SMB2 NEGOTIATE probe. Other open ports receive passive banner reads. A validated response supplies structured service information. SYN mode sends a raw TCP SYN and validates response checksums, reversed endpoints, flags, and acknowledgment. It does not collect application banners.
 4. Progress is reported on stderr while ports are scanned. Each host’s measured table prints after its scan and before its optional AI research. Full-range scans and `--ports` lists containing ranges show only confirmed open ports; lists of individual ports show every selected outcome. AI configuration is validated before scanning; configuration errors disable the AI step without stopping the scan.
 5. With `--ai`, the program sends bounded observations for the current host to DeepSeek through Rig before moving to the next host. With a Brave Search key configured, the agent researches CVEs, vendor and distribution advisories, and Exploit-DB references using a public web search tool. An optional local advisory file can supplement the web evidence. Interpretation and retrieved source links appear separately from measurements. AI or search failures leave the scan report visible.
 
@@ -635,11 +650,17 @@ src/
 │   ├── udp.rs          UDP probes and outcome classification
 │   ├── rpc.rs          Bounded portmapper exchange, record framing, and validation
 │   ├── nfs.rs          NFSv3 NULL requests, shared RPC exchange, and identification
+│   ├── smb.rs          SMB2 request encoding, bounded exchange, and identification
+│   ├── smb/
+│   │   └── constants.rs  SMB2 protocol constants
 │   └── http.rs         HTTP/HTTPS candidates, HEAD probes, and header extraction
 ├── model/
 │   ├── mod.rs          Scan results, preserved banner bytes, and AI data
 │   ├── progress.rs     Scan startup and throttled progress on stderr
 │   ├── syn.rs          Parsed packets, replies, and original probe data
+│   ├── smb_2_header.rs  Structured SMB2 synchronous request header
+│   ├── smb_2_request_body.rs  Structured SMB2 NEGOTIATE body
+│   ├── smb_2_request.rs  Complete unframed SMB2 request model
 │   └── report.rs       Safe banner previews and terminal report rendering
 ├── mapper/
 │   ├── mod.rs          Model mapping modules

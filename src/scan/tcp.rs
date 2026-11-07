@@ -1,4 +1,4 @@
-//! TCP connection measurements with passive banners or HTTP, HTTPS, RPC, and NFS probes.
+//! TCP connection measurements with passive banners or HTTP, HTTPS, RPC, NFS, and SMB probes.
 
 use std::future::Future;
 use std::io::ErrorKind;
@@ -9,7 +9,7 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::net::TcpStream;
 use tokio::time::{Instant as Deadline, timeout_at};
 
-use super::{http, identify, nfs, rpc};
+use super::{http, identify, nfs, rpc, smb};
 use crate::mapper::service_information::apply_service_information;
 use crate::model::rpc::RpcMapping;
 use crate::model::service_information::ServiceInformation;
@@ -75,6 +75,12 @@ async fn collect_service(
         drop(stream);
         collect_nfs(result, timeout, |_xid, _deadline, _limit| {
             nfs::probe(target, _xid, _deadline, _limit)
+        })
+        .await;
+    } else if smb::is_smb_candidate(target.port()) {
+        drop(stream);
+        collect_smb(result, timeout, |_message_id, _guid, _deadline, _limit| {
+            smb::probe(target, _message_id, _guid, _deadline, _limit)
         })
         .await;
     } else {
@@ -158,6 +164,34 @@ where
         .await
         .and_then(|(_xid, _reply)| nfs::response_information(&_reply, _xid));
     apply_service_probe_result(_result, _response, "NFS");
+}
+
+/// Identify SMB only on an open TCP candidate, preserving connection measurements.
+async fn collect_smb<F, Fut>(_result: &mut ScanResult, _timeout: Duration, _probe: F)
+where
+    F: FnOnce(u64, [u8; 16], Deadline, usize) -> Fut,
+    Fut: Future<Output = Result<Vec<u8>, String>>,
+{
+    if _result.transport != ScanMode::Tcp
+        || _result.status != PortStatus::Open
+        || !smb::is_smb_candidate(_result.port)
+    {
+        return;
+    }
+    let _deadline = Deadline::now() + _timeout;
+    let _response = async {
+        let _guid = smb::client_guid()?;
+        let _reply = _probe(
+            smb::INITIAL_MESSAGE_ID,
+            _guid,
+            _deadline,
+            smb::MAX_REPLY_BYTES,
+        )
+        .await?;
+        smb::response_information(&_reply, smb::INITIAL_MESSAGE_ID)
+    }
+    .await;
+    apply_service_probe_result(_result, _response, "SMB");
 }
 
 /// Share XID generation and per-exchange bounds between portmapper and NFS.

@@ -1,6 +1,6 @@
 use super::{
     apply_http_probe_result, apply_rpc_dump_result, apply_rpc_probe_result, banner_result,
-    collect_nfs, collect_rpc, collect_rpc_dump, read_banner,
+    collect_nfs, collect_rpc, collect_rpc_dump, collect_smb, read_banner,
 };
 use crate::model::{PortStatus, ScanMode, ScanResult};
 use std::io;
@@ -253,6 +253,168 @@ async fn nfs_collection_skips_other_ports_states_and_scan_modes() {
         assert_eq!(result.transport, transport);
         assert_eq!(result.status, status);
         assert!(result.service.is_none());
+        assert!(result.observation.is_none());
+    }
+}
+
+fn smb_reply_fixture(message_id: u64, dialect: u16) -> Vec<u8> {
+    let mut reply = vec![0; 128];
+    reply[..8].copy_from_slice(&[0xfe, 0x53, 0x4d, 0x42, 64, 0, 0, 0]);
+    reply[14..20].copy_from_slice(&[7, 0, 1, 0, 0, 0]);
+    reply[24..32].copy_from_slice(&message_id.to_le_bytes());
+    reply[64..68].copy_from_slice(&[65, 0, 1, 0]);
+    reply[68..70].copy_from_slice(&dialect.to_le_bytes());
+    reply[92..104].copy_from_slice(&[0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0]);
+    reply
+}
+
+#[tokio::test]
+async fn smb_collection_uses_bounded_negotiation_and_preserves_connection_evidence() {
+    for dialect in [0x0202, 0x0210] {
+        let mut result = measured_open_tcp_port(445);
+        result.observation = Some("earlier observation".into());
+        result.banner = Some(b"earlier bytes".to_vec());
+        let timeout = Duration::from_secs(1);
+        let before = tokio::time::Instant::now();
+        collect_smb(&mut result, timeout, |message_id, guid, deadline, limit| {
+            assert_eq!(message_id, 0);
+            assert_eq!(guid, super::smb::client_guid().unwrap());
+            assert!(deadline >= before + timeout);
+            assert!(deadline <= tokio::time::Instant::now() + timeout);
+            assert_eq!(limit, 4096);
+            async move { Ok(smb_reply_fixture(message_id, dialect)) }
+        })
+        .await;
+        super::identify::collect_banner(&mut result);
+        assert_eq!(result.service.as_deref(), Some("smb"));
+        let information = result.service_information.as_ref().unwrap();
+        assert_eq!(information.transport, ScanMode::Tcp);
+        assert!(information.product.is_none());
+        assert!(information.version.is_none());
+        assert_eq!(
+            information.observation,
+            Some(format!(
+                "SMB protocol dialect {dialect:#06x} negotiated successfully"
+            )),
+        );
+        assert_eq!(result.port, 445);
+        assert_eq!(result.transport, ScanMode::Tcp);
+        assert_eq!(result.status, PortStatus::Open);
+        assert_eq!(result.elapsed, Duration::from_millis(17));
+        assert!(result.error.is_none());
+        assert!(result.rpc_mappings.is_none());
+        assert_eq!(result.banner.as_deref(), Some(b"earlier bytes".as_slice()));
+        assert!(
+            result
+                .observation
+                .as_deref()
+                .unwrap()
+                .starts_with("earlier observation; SMB")
+        );
+    }
+}
+
+#[tokio::test]
+async fn smb_failures_keep_open_measurements_and_previous_identification() {
+    for failure in [
+        "io",
+        "header",
+        "truncated",
+        "id",
+        "status",
+        "dialect",
+        "buffer",
+    ] {
+        let mut result = measured_open_tcp_port(445);
+        let previous =
+            crate::mapper::service_information::map_tcp_service("prior", None, None, None);
+        super::apply_service_information(&mut result, previous.clone());
+        result.observation = Some("earlier observation".into());
+        result.banner = Some(b"earlier bytes".to_vec());
+        result.rpc_mappings = Some(vec![advertised_mapping()]);
+        collect_smb(
+            &mut result,
+            Duration::from_secs(1),
+            |message_id, _, _, _| async move {
+                if failure == "io" {
+                    return Err("fixture SMB timeout".into());
+                }
+                let mut reply = smb_reply_fixture(message_id, 0x0210);
+                match failure {
+                    "header" => reply[0] = 0xff,
+                    "truncated" => reply.truncate(127),
+                    "id" => reply[24] = 1,
+                    "status" => reply[8] = 1,
+                    "dialect" => reply[68..70].copy_from_slice(&0x0311_u16.to_le_bytes()),
+                    "buffer" => reply[122] = 1,
+                    _ => unreachable!(),
+                }
+                Ok(reply)
+            },
+        )
+        .await;
+        assert_eq!(result.status, PortStatus::Open);
+        assert_eq!(result.service.as_deref(), Some("prior"));
+        assert_eq!(result.service_information, Some(previous));
+        assert_eq!(result.elapsed, Duration::from_millis(17));
+        assert!(result.error.is_none());
+        assert_eq!(result.banner.as_deref(), Some(b"earlier bytes".as_slice()));
+        assert_eq!(result.rpc_mappings, Some(vec![advertised_mapping()]));
+        assert!(
+            result
+                .observation
+                .as_deref()
+                .unwrap()
+                .starts_with("earlier observation; SMB probe failed: ")
+        );
+    }
+}
+
+#[tokio::test]
+async fn smb_candidate_port_alone_does_not_establish_identity() {
+    let mut result = measured_open_tcp_port(445);
+    collect_smb(&mut result, Duration::from_secs(1), |_, _, _, _| async {
+        Err("fixture read timeout".into())
+    })
+    .await;
+    assert_eq!(result.status, PortStatus::Open);
+    assert!(result.service.is_none());
+    assert!(result.service_information.is_none());
+    assert!(result.error.is_none());
+    assert_eq!(
+        result.observation.as_deref(),
+        Some("SMB probe failed: fixture read timeout")
+    );
+}
+
+#[tokio::test]
+async fn smb_collection_skips_other_ports_states_and_scan_modes() {
+    for (port, transport, status) in [
+        (139, ScanMode::Tcp, PortStatus::Open),
+        (80, ScanMode::Tcp, PortStatus::Open),
+        (111, ScanMode::Tcp, PortStatus::Open),
+        (2049, ScanMode::Tcp, PortStatus::Open),
+        (446, ScanMode::Tcp, PortStatus::Open),
+        (445, ScanMode::Udp, PortStatus::Open),
+        (445, ScanMode::Syn, PortStatus::Open),
+        (445, ScanMode::Tcp, PortStatus::Closed),
+        (445, ScanMode::Tcp, PortStatus::Filtered),
+        (445, ScanMode::Tcp, PortStatus::OpenOrFiltered),
+        (445, ScanMode::Tcp, PortStatus::Unknown),
+    ] {
+        let mut result = measured_open_tcp_port(port);
+        result.transport = transport;
+        result.status = status;
+        collect_smb(&mut result, Duration::from_secs(1), |_, _, _, _| async {
+            panic!("SMB exchange must not run for this result")
+        })
+        .await;
+        assert_eq!(result.port, port);
+        assert_eq!(result.transport, transport);
+        assert_eq!(result.status, status);
+        assert_eq!(result.elapsed, Duration::from_millis(17));
+        assert!(result.service.is_none());
+        assert!(result.service_information.is_none());
         assert!(result.observation.is_none());
     }
 }

@@ -25,6 +25,15 @@ limit. Failures preserve the open state. This first NFS implementation supports
 NFSv3 over TCP port 2049; it does not probe UDP, SYN results, or additional ports
 listed in RPC registrations. See [NFS learning notes](nfs-identification.md).
 
+Confirmed-open TCP port 445 automatically receives an SMB2 NEGOTIATE probe offering
+2.0.2 and 2.1. A validated response supplies `smb` and the negotiated dialect;
+software version and OS remain unknown. It has one `--timeout-ms` identification
+budget across connect/write/read and a 4096-byte reply limit. Failures preserve
+the measured open state and append a diagnostic. It does not authenticate,
+enumerate shares, or probe port 139, UDP, or SYN results. Live interoperability
+has not been validated; automated tests use fixtures and in-memory streams.
+See [SMB identification and learning notes](smb-identification.md).
+
 Example command for a lab host you are authorized to assess:
 
 ```bash
@@ -51,7 +60,7 @@ rmap --help
 Cargo's installation directory, usually `~/.cargo/bin`, must be on `PATH`. Reinstall after source changes when invoking the installed `rmap`; building the project alone does not update that executable.
 
 After installation, `rmap --help` prints the startup banner with version
-`v0.5.4` without starting a scan. The same check can be made directly with
+`v0.5.5` without starting a scan. The same check can be made directly with
 `./target/release/rmap --help`.
 
 ## Select TCP connect, TCP SYN, or UDP

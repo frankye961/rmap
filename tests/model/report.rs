@@ -4,6 +4,35 @@ use super::format_result;
 use crate::model::{PortStatus, ScanMode, ScanResult};
 
 #[test]
+fn displays_smb_dialect_as_protocol_evidence_without_a_software_version() {
+    let detail = "SMB protocol dialect 0x0210 negotiated successfully";
+    let information =
+        crate::mapper::service_information::map_tcp_service("smb", None, None, Some(detail));
+    let mut result = ScanResult {
+        port: 445,
+        transport: ScanMode::Tcp,
+        status: PortStatus::Open,
+        service: None,
+        elapsed: Duration::from_millis(17),
+        error: None,
+        observation: information.observation.clone(),
+        banner: None,
+        service_information: None,
+        rpc_mappings: None,
+    };
+    crate::mapper::service_information::apply_service_information(&mut result, information);
+    let line = format_result(&result);
+    assert!(line.starts_with("445/tcp"));
+    assert!(line.contains("open"));
+    assert!(line.contains("smb"));
+    assert!(line.contains("17.00 ms"));
+    assert!(line.contains(detail));
+    let information = result.service_information.as_ref().unwrap();
+    assert!(information.product.is_none());
+    assert!(information.version.is_none());
+}
+
+#[test]
 fn displays_mapped_rpc_information_without_a_fabricated_software_version() {
     let information = crate::mapper::service_information::map_portmapper_service();
     let mut result = ScanResult {
