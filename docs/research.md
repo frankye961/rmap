@@ -12,14 +12,14 @@ an open port nor an AI-generated CVE candidate establishes exploitability.
 
 ## Current experimental foundation
 
-Version 0.5.3 provides TCP connect, UDP, and Linux IPv4 SYN scanning; bounded
+Version 0.5.4 provides TCP connect, UDP, and Linux IPv4 SYN scanning; bounded
 concurrent scheduling; passive banner recognition; HTTP/HTTPS probes; and TCP
 portmapper v2 NULL identification followed by DUMP enumeration. Advertised
 registrations remain separate from measured connectivity. Scan measurements and AI interpretation use
 separate models. Offline tests cover byte encoding, malformed responses,
 timeouts, scheduling, and preservation of open results when identification fails.
 
-Current development adds [NFSv3 NULL identification](nfs-identification.md) on
+It also includes [NFSv3 NULL identification](nfs-identification.md) on
 selected, confirmed-open TCP port 2049 using the shared RPC exchange. Its live
 behavior remains unverified by the assistant.
 

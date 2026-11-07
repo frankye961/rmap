@@ -1,6 +1,6 @@
 # rmap (ALPHA version)
 
-Current version: **0.5.3**.
+Current version: **0.5.4**.
 
 rmap is my research project in networking and cybersecurity. It began as a way
 to learn Rust and network programming and has grown into a network scanner
@@ -19,8 +19,13 @@ remediation. Those assessment features are planned; the current application
 provides the scanning and service-identification foundation. See
 [research goals and experiment guidance](docs/research.md).
 
-## Version 0.5.3: RPC identification and enumeration
+## Version 0.5.4: NFSv3 identification
 
+- Automatic NFSv3 NULL probing on confirmed-open TCP port 2049, with validated
+  `nfs` identification and an explicit protocol-version description. Failures
+  preserve the open state and existing evidence; software versions stay unknown.
+- Shared RPC request construction for portmapper and NFS, with offline byte-level
+  tests and a dedicated NFS learning guide.
 - Automatic TCP portmapper v2 NULL probing on confirmed-open port 111, with
   validated `rpcbind` identification and no guessed software version.
 - Automatic DUMP enumeration after successful identification, with at most
@@ -34,7 +39,7 @@ provides the scanning and service-identification foundation. See
   learning and research documentation. No dependencies were added.
 
 Offline tests cover parsing, framing, timeouts, result preservation, and the
-scanner integration. Live DUMP and TLS behavior still require controlled-lab
+scanner integration. Live NFS, DUMP, and TLS behavior still require controlled-lab
 validation; the tests do not establish real-world scan accuracy or performance.
 
 ## HTTPS identification
@@ -94,7 +99,7 @@ explicitly. Registrations do not establish reachability, add measured open ports
 or expand the requested scan scope. Live DUMP interoperability has not been
 validated by the assistant; automated checks use fixtures and in-memory streams.
 
-## Current development: NFSv3 identification
+## NFSv3 identification
 
 Confirmed-open TCP port 2049 now receives an NFSv3 NULL probe using RPC program
 100003, program version 3, and procedure 0. A validated successful reply labels

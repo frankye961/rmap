@@ -1,5 +1,7 @@
 # NFSv3 identification and learning notes
 
+Available in rmap **0.5.4**.
+
 The initial NFS feature identifies a service answering an NFSv3 NULL request
 on selected, confirmed-open TCP port 2049. The reply supplies protocol evidence;
 it does not identify server software or establish permission to access files.

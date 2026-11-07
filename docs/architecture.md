@@ -1,12 +1,12 @@
 # Architecture
 
-Version **0.5.3** connects bounded TCP portmapper v2 identification and DUMP
-enumeration to the scanner alongside HTTP/HTTPS probing and passive SSH, FTP,
+Version **0.5.4** combines bounded TCP NFSv3 identification, portmapper v2
+identification and DUMP enumeration, HTTP/HTTPS probing, and passive SSH, FTP,
 and SMTP recognition. The
 IPv4 SYN pipeline continues to perform port discovery without application
 identification.
 
-Current development adds NFSv3 NULL identification on selected, confirmed-open
+NFSv3 NULL identification runs on selected, confirmed-open
 TCP port 2049 through the same bounded RPC exchange. See the
 [NFS learning notes](nfs-identification.md).
 
