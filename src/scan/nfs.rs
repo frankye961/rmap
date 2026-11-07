@@ -12,9 +12,8 @@ pub(super) fn is_nfs_candidate(_port: u16) -> bool {
 }
 
 /// Build an argument-free NFSv3 NULL call without a TCP record marker.
-pub(super) fn build_nfs_null_call(_xid: u32) -> Result<Vec<u8>, String> {
-    let _call = super::rpc::build_rpc_call(_xid, 100003, 3, 0);
-    Ok(_call)
+pub(super) fn build_nfs_null_call(_xid: u32) -> Vec<u8> {
+    super::rpc::build_rpc_call(_xid, 100003, 3, 0)
 }
 
 /// Exchange one NFSv3 NULL call under the caller's deadline and reply-size limit.
@@ -24,10 +23,8 @@ pub(super) async fn probe(
     _deadline: Instant,
     _max_bytes: usize,
 ) -> Result<Vec<u8>, String> {
-    let _unframed_request = build_nfs_null_call(_xid)?;
-    let _reply =
-        super::rpc::exchange_rpc_call(_target, &_unframed_request, _deadline, _max_bytes).await?;
-    Ok(_reply)
+    let _unframed_request = build_nfs_null_call(_xid);
+    super::rpc::exchange_rpc_call(_target, &_unframed_request, _deadline, _max_bytes).await
 }
 
 /// Validate an NFSv3 NULL reply and prepare structured service information.
@@ -39,13 +36,12 @@ pub(super) fn response_information(
     if _cursor != _reply.len() {
         return Err("NFSv3 NULL reply has unexpected payload".into());
     }
-    let _service_info = crate::mapper::service_information::map_tcp_service(
+    Ok(crate::mapper::service_information::map_tcp_service(
         "nfs",
         None,
         None,
         Some("RPC program 100003; NFS protocol version 3; NULL procedure succeeded"),
-    );
-    Ok(_service_info)
+    ))
 }
 
 #[cfg(test)]

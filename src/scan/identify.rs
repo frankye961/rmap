@@ -74,16 +74,10 @@ fn is_http_component(_value: &str) -> bool {
 }
 
 fn identify_service(banner: &[u8]) -> Option<ServiceInformation> {
-    match identify_ssh(banner) {
-        Some(information) => Some(information),
-        None => match identify_http(banner) {
-            Some(information) => Some(information),
-            None => match identify_ftp(banner) {
-                Some(information) => Some(information),
-                None => identify_smtp(banner),
-            },
-        },
-    }
+    identify_ssh(banner)
+        .or_else(|| identify_http(banner))
+        .or_else(|| identify_ftp(banner))
+        .or_else(|| identify_smtp(banner))
 }
 
 fn identify_ssh(banner: &[u8]) -> Option<ServiceInformation> {

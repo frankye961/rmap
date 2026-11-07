@@ -43,9 +43,10 @@ fn head_request(client: &Client, target: SocketAddr) -> Result<Request, reqwest:
 
 /// Select the request for a candidate already chosen by the TCP scanner.
 fn probe_request(client: &Client, target: SocketAddr) -> Result<Request, reqwest::Error> {
-    match is_http_candidate(target.port()) {
-        true => head_request(client, target),
-        false => https_head_request(client, target),
+    if is_http_candidate(target.port()) {
+        head_request(client, target)
+    } else {
+        https_head_request(client, target)
     }
 }
 

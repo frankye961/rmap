@@ -43,8 +43,9 @@ and selected TCP port 2049; RPC over UDP remains future work.
 
 ## How the scanner calls the probe
 
-After the initial TCP connection confirms port 111 is open, `scan_port` drops
-that stream and calls `collect_rpc`. This helper creates a random XID using
+After the initial TCP connection confirms port 111 is open, `scan_port` delegates
+identification to `collect_service`, which drops the stream and calls `collect_rpc`.
+The latter helper creates a random XID using
 the existing `getrandom` dependency, computes an absolute deadline from the scan
 timeout, and passes both to `rpc::probe` through `run_rpc_exchange`. It enforces a
 4096-byte reply limit.

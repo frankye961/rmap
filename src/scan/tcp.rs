@@ -3,8 +3,8 @@
 use std::future::Future;
 use std::io::ErrorKind;
 use std::net::SocketAddr;
-
 use std::time::{Duration, Instant};
+
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::net::TcpStream;
 use tokio::time::{Instant as Deadline, timeout_at};
@@ -22,69 +22,66 @@ pub(super) async fn scan_port(target: SocketAddr, timeout: Duration) -> ScanResu
         .unwrap_or_else(|_| Err(std::io::Error::from(ErrorKind::TimedOut)));
     let elapsed = started.elapsed();
 
-    let mut result = match connection {
-        Ok(stream) => {
-            let mut result = ScanResult {
-                port: target.port(),
-                transport: ScanMode::Tcp,
-                status: PortStatus::Open,
-                service: None,
-                elapsed,
-                error: None,
-                observation: None,
-                banner: None,
-                service_information: None,
-                rpc_mappings: None,
-            };
-            if http::is_http_candidate(target.port()) || http::is_https_candidate(target.port()) {
-                drop(stream);
-                apply_http_probe_result(&mut result, http::probe(target, timeout).await);
-            } else if rpc::is_rpc_candidate(target.port()) {
-                // Keep only one connection per task, as required by descriptor budgeting.
-                drop(stream);
-                collect_rpc(&mut result, timeout, |_xid, _deadline, _limit| {
-                    rpc::probe(target, _xid, _deadline, _limit)
-                })
-                .await;
-                collect_rpc_dump(&mut result, timeout, |_xid, _deadline, _limit| {
-                    rpc::probe_dump(target, _xid, _deadline, _limit)
-                })
-                .await;
-            } else if nfs::is_nfs_candidate(target.port()) {
-                drop(stream);
-                collect_nfs(&mut result, timeout, |_xid, _deadline, _limit| {
-                    nfs::probe(target, _xid, _deadline, _limit)
-                })
-                .await;
-            } else {
-                let (observation, banner) = read_banner(stream, timeout).await;
-                result.observation = Some(observation);
-                result.banner = banner;
-            }
-            result
-        }
+    let mut result = ScanResult {
+        port: target.port(),
+        transport: ScanMode::Tcp,
+        status: PortStatus::Open,
+        service: None,
+        elapsed,
+        error: None,
+        observation: None,
+        banner: None,
+        service_information: None,
+        rpc_mappings: None,
+    };
+    match connection {
+        Ok(stream) => collect_service(&mut result, stream, target, timeout).await,
         Err(error) => {
-            let status = match error.kind() {
+            result.status = match error.kind() {
                 ErrorKind::ConnectionRefused => PortStatus::Closed,
                 ErrorKind::TimedOut => PortStatus::Filtered,
                 _ => PortStatus::Unknown,
             };
-            ScanResult {
-                port: target.port(),
-                transport: ScanMode::Tcp,
-                status,
-                service: None,
-                elapsed,
-                error: Some(error.to_string()),
-                observation: None,
-                banner: None,
-                service_information: None,
-                rpc_mappings: None,
-            }
+            result.error = Some(error.to_string());
         }
-    };
+    }
     identify::collect_banner(&mut result);
     result
+}
+
+/// Select identification only after a successful connection measurement.
+async fn collect_service(
+    result: &mut ScanResult,
+    stream: TcpStream,
+    target: SocketAddr,
+    timeout: Duration,
+) {
+    if http::is_http_candidate(target.port()) || http::is_https_candidate(target.port()) {
+        drop(stream);
+        apply_http_probe_result(result, http::probe(target, timeout).await);
+    } else if rpc::is_rpc_candidate(target.port()) {
+        // Close the measured connection before opening a probe connection.
+        // Descriptor budgeting allows only one live TCP connection per task.
+        drop(stream);
+        collect_rpc(result, timeout, |_xid, _deadline, _limit| {
+            rpc::probe(target, _xid, _deadline, _limit)
+        })
+        .await;
+        collect_rpc_dump(result, timeout, |_xid, _deadline, _limit| {
+            rpc::probe_dump(target, _xid, _deadline, _limit)
+        })
+        .await;
+    } else if nfs::is_nfs_candidate(target.port()) {
+        drop(stream);
+        collect_nfs(result, timeout, |_xid, _deadline, _limit| {
+            nfs::probe(target, _xid, _deadline, _limit)
+        })
+        .await;
+    } else {
+        let (observation, banner) = read_banner(stream, timeout).await;
+        result.observation = Some(observation);
+        result.banner = banner;
+    }
 }
 
 fn apply_http_probe_result(

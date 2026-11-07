@@ -1,3 +1,5 @@
+//! Bounded TCP RPC exchanges, reply validation, and portmapper enumeration.
+
 use std::net::SocketAddr;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -142,9 +144,7 @@ fn record_marker(_length: usize) -> Result<u32, String> {
         ));
     }
 
-    let u32_size = _length as u32;
-    let end_fragment: u32 = 0x8000_0000 | u32_size;
-    Ok(end_fragment)
+    Ok(0x8000_0000 | _length as u32)
 }
 
 /// Decode exactly four marker bytes into (last fragment, payload length).
@@ -165,10 +165,10 @@ fn decode_record_marker(_marker: &[u8]) -> Result<(bool, usize), String> {
 /// Prefix one RPC message with a final-fragment TCP record marker.
 fn frame_rpc_record(_message: &[u8]) -> Result<Vec<u8>, String> {
     let _marker = record_marker(_message.len())?;
-    let mut _empty_frame = Vec::new();
-    append_u32(&mut _empty_frame, _marker);
-    _empty_frame.extend_from_slice(_message);
-    Ok(_empty_frame)
+    let mut _frame = Vec::new();
+    append_u32(&mut _frame, _marker);
+    _frame.extend_from_slice(_message);
+    Ok(_frame)
 }
 
 /// Read one complete RPC record, returning payload bytes without fragment markers.
@@ -363,18 +363,18 @@ pub(super) fn parse_portmapper_dump_reply(
     _expected_xid: u32,
     _max_entries: usize,
 ) -> Result<Vec<RpcMapping>, String> {
-    let _cursor = validate_rpc_success_reply(_data, _expected_xid)?;
-    let mut _mut_cursor = _cursor;
+    let mut _cursor = validate_rpc_success_reply(_data, _expected_xid)?;
     let mut _mappings = Vec::new();
     loop {
-        let _list_marker = read_u32(_data, &mut _mut_cursor)
+        let _list_marker = read_u32(_data, &mut _cursor)
             .ok_or_else(|| "Incomplete RPC list marker: expected 4 bytes".to_string())?;
         if _list_marker == 0 {
-            if _mut_cursor != _data.len() {
+            if _cursor != _data.len() {
                 return Err("Unexpected bytes after RPC DUMP list".into());
             }
             return Ok(_mappings);
-        } else if _list_marker != 1 {
+        }
+        if _list_marker != 1 {
             return Err(format!(
                 "Unexpected RPC list marker {_list_marker}: expected 0 or 1"
             ));
@@ -384,7 +384,7 @@ pub(super) fn parse_portmapper_dump_reply(
                 "RPC DUMP reply exceeded maximum of {_max_entries} entries"
             ));
         }
-        let _mapping = read_rpc_mapping(_data, &mut _mut_cursor)?;
+        let _mapping = read_rpc_mapping(_data, &mut _cursor)?;
         _mappings.push(_mapping);
     }
 }

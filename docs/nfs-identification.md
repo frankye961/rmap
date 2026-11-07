@@ -30,7 +30,8 @@ Neither value is a daemon's software release version.
 ## Functions and flow
 
 1. `tcp::scan_port` first measures a normal TCP connection. Its success establishes
-   the open-port result. If port 2049 was selected, the initial stream closes
+   the open-port result. `tcp::collect_service` selects identification. If port
+   2049 was selected, the initial stream closes
    before the NFS probe connection opens, preserving one live socket per task.
 2. `nfs::is_nfs_candidate` chooses port 2049 as the initial hint. It does not
    identify NFS by itself. Other selected ports continue through their existing
@@ -62,7 +63,9 @@ identification failures; they do not become a guessed NFS version.
 - `Vec<u8>` owns the request bytes. Passing `&_unframed_request` borrows them
   as a byte slice for the shared exchange; ownership stays in the NFS function.
 - `async`/`.await` allow I/O to yield to the existing Tokio scheduler.
-- `?` propagates errors from request creation, exchange, and validation.
+- `build_nfs_null_call` returns a `Vec<u8>` directly because constructing this
+  fixed request has no recoverable error path. `?` propagates errors from the
+  exchange and reply validation.
 - The successful reply validator returns a `usize` cursor, not reply bytes.
   Compare that number directly with `_reply.len()`; a number has no `.len()`.
 - The cursor comes after a potentially padded verifier. Its correct value need

@@ -176,8 +176,9 @@ open TCP-connect candidate. Successful identification uses
 Connection state, elapsed time, socket error, and passive bytes are preserved.
 Failure also retains any previous service identification. Tests supply fixture
 replies and exchange errors at this boundary; they do not open sockets.
-`scan_port` now selects this path for confirmed-open TCP port 111, closing its
-initial stream before `collect_rpc` starts a separate exchange. This preserves
+`scan_port` delegates identification to `collect_service` after measuring the
+connection. For confirmed-open TCP port 111, that helper closes the initial
+stream before `collect_rpc` starts a separate exchange. This preserves
 the descriptor budget of one TCP connection per active task. `collect_rpc`
 uses `run_rpc_exchange` to generate an XID with the existing `getrandom`
 dependency, compute an absolute deadline from the configured timeout, and invoke
@@ -206,7 +207,7 @@ the DUMP parser reads its list from that offset.
 
 Both probe wrappers reuse `exchange_rpc_call` and `exchange_rpc_stream`; the
 latter permits in-memory request/response tests without sockets. After NULL
-identifies portmapper, `scan_port` calls `collect_rpc_dump`, which uses
+identifies portmapper, `collect_service` calls `collect_rpc_dump`, which uses
 `run_rpc_exchange` with `rpc::probe_dump`. This is a fresh connection, XID, and
 timeout budget; NULL's connection is already closed. Both exchanges share the
 4096-byte reply bound. DUMP parsing additionally enforces `MAX_DUMP_ENTRIES`
@@ -224,7 +225,7 @@ and trailing bytes. Runtime enumeration only follows successful NULL
 identification on an open TCP port 111; no extra endpoint is probed based on a
 registration. UDP and SYN never call the enumeration helper.
 
-NFS follows a separate candidate path in `scan_port`. After a successful initial
+NFS follows a separate candidate path in `collect_service`. After a successful initial
 connection to selected TCP port 2049, the scanner closes that stream and calls
 `collect_nfs`. The existing `run_rpc_exchange` supplies the XID, deadline, and
 4096-byte reply bound. `nfs::probe` delegates framing and I/O to
