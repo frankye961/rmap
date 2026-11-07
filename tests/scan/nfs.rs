@@ -41,9 +41,9 @@ fn selects_only_the_initial_nfs_tcp_candidate() {
 
 #[test]
 fn builds_the_unframed_nfs_request_and_preserves_transaction_ids() {
-    assert_eq!(build_nfs_null_call(0x12345678).unwrap(), NFS_NULL_CALL);
+    assert_eq!(build_nfs_null_call(0x12345678), NFS_NULL_CALL);
     for xid in [0_u32, 1, 0x80000000, u32::MAX] {
-        let call = build_nfs_null_call(xid).unwrap();
+        let call = build_nfs_null_call(xid);
         assert_eq!(call.len(), 40);
         assert_eq!(&call[..4], &xid.to_be_bytes());
         assert_eq!(&call[4..], &NFS_NULL_CALL[4..]);
