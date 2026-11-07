@@ -6,14 +6,19 @@ use tokio::time::Instant;
 
 use crate::model::service_information::ServiceInformation;
 
+const NFS_PORT: u16 = 2049;
+const NFS_PROGRAM: u32 = 100003;
+const NFS_VERSION: u32 = 3;
+const NULL_PROCEDURE: u32 = 0;
+
 /// Select the initial TCP candidate port; a validated reply establishes identity.
 pub(super) fn is_nfs_candidate(_port: u16) -> bool {
-    _port == 2049
+    _port == NFS_PORT
 }
 
 /// Build an argument-free NFSv3 NULL call without a TCP record marker.
 pub(super) fn build_nfs_null_call(_xid: u32) -> Vec<u8> {
-    super::rpc::build_rpc_call(_xid, 100003, 3, 0)
+    super::rpc::build_rpc_call(_xid, NFS_PROGRAM, NFS_VERSION, NULL_PROCEDURE)
 }
 
 /// Exchange one NFSv3 NULL call under the caller's deadline and reply-size limit.
@@ -40,7 +45,9 @@ pub(super) fn response_information(
         "nfs",
         None,
         None,
-        Some("RPC program 100003; NFS protocol version 3; NULL procedure succeeded"),
+        Some(&format!(
+            "RPC program {NFS_PROGRAM}; NFS protocol version {NFS_VERSION}; NULL procedure succeeded"
+        )),
     ))
 }
 

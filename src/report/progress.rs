@@ -3,6 +3,7 @@
 use std::io::{self, IsTerminal};
 use std::time::{Duration, Instant};
 
+use super::constants::{REDIRECTED_PROGRESS_SECS, TERMINAL_PROGRESS_SECS};
 use crate::model::{ScanMode, ScanResult};
 
 pub struct ScanProgress {
@@ -36,7 +37,11 @@ impl ScanProgress {
     }
 
     pub fn update(&mut self, completed: usize, result: &ScanResult) {
-        let interval = Duration::from_secs(if self.terminal { 1 } else { 5 });
+        let interval = Duration::from_secs(if self.terminal {
+            TERMINAL_PROGRESS_SECS
+        } else {
+            REDIRECTED_PROGRESS_SECS
+        });
         if completed != self.total && self.last_update.elapsed() < interval {
             return;
         }
@@ -78,5 +83,5 @@ fn format_progress(
 }
 
 #[cfg(test)]
-#[path = "../../tests/model/progress.rs"]
+#[path = "../../tests/report/progress.rs"]
 mod tests;

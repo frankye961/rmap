@@ -11,7 +11,9 @@ use crate::mapper::syn::map_syn_result;
 use crate::model::syn::{SynProbe, TcpReply};
 use crate::model::{PortStatus, ScanResult};
 
+mod constants;
 mod packet;
+use constants::{SYN_WINDOW, TCP_HEADER_BYTES};
 mod reply;
 mod socket;
 
@@ -26,7 +28,7 @@ pub(super) fn check_available() -> Result<(), String> {
 struct PreparedProbe {
     _source_socket: Socket,
     probe: SynProbe,
-    header: [u8; 20],
+    header: [u8; TCP_HEADER_BYTES],
     socket: AsyncFd<Socket>,
 }
 
@@ -81,7 +83,7 @@ fn prepare_probe(target: SocketAddr) -> Result<PreparedProbe, String> {
         source_port,
         destination.port(),
         sequence_number,
-        1024,
+        SYN_WINDOW,
     )?;
     let raw = socket::prepare_raw_tcp_socket(source_ip).map_err(socket::raw_socket_error)?;
     let socket = socket::register_raw_socket(raw)?;

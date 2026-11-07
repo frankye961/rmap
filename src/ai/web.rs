@@ -11,9 +11,7 @@ use serde_json::{Value, json};
 
 use crate::model::WebSource;
 
-const SEARCH_URL: &str = "https://api.search.brave.com/res/v1/web/search";
-const MAX_SEARCHES: usize = 6;
-const MAX_BODY_BYTES: usize = 524_288;
+use super::constants::*;
 
 #[derive(Default)]
 struct SearchState {
@@ -37,7 +35,7 @@ pub struct SearchArgs {
 impl WebSearch {
     pub fn new(api_key: Option<String>, timeout: Duration) -> Result<Self, String> {
         let client = Client::builder()
-            .timeout(timeout.min(Duration::from_secs(15)))
+            .timeout(timeout.min(Duration::from_secs(SEARCH_TIMEOUT_SECS)))
             .redirect(Policy::none())
             .build()
             .map_err(|_| "Could not initialize web search client")?;
@@ -68,10 +66,10 @@ impl WebSearch {
     }
 
     async fn search(&self, query: &str) -> Result<Vec<WebSource>, String> {
-        if query.trim().is_empty() || query.chars().count() > 200 {
-            return Err(
-                "Use a nonempty product/version search query of at most 200 characters".into(),
-            );
+        if query.trim().is_empty() || query.chars().count() > MAX_QUERY_CHARS {
+            return Err(format!(
+                "Use a nonempty product/version search query of at most {MAX_QUERY_CHARS} characters"
+            ));
         }
         let key = self
             .api_key
@@ -85,7 +83,7 @@ impl WebSearch {
             state.queries.push(query.into());
         }
         let request = search_request(&self.client, key, query)?;
-        let mut response = self
+        let response = self
             .client
             .execute(request)
             .await
@@ -96,19 +94,7 @@ impl WebSearch {
                 response.status().as_u16()
             ));
         }
-        let mut body = Vec::new();
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .map_err(|_| "Could not read web search response")?
-        {
-            if body.len() + chunk.len() > MAX_BODY_BYTES {
-                return Err("Web search response exceeded the size limit".into());
-            }
-            body.extend_from_slice(&chunk);
-        }
-        let data: Value =
-            serde_json::from_slice(&body).map_err(|_| "Web search returned malformed JSON")?;
+        let data = read_response(response).await?;
         let sources = parse_sources(&data)?;
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         for source in &sources {
@@ -124,12 +110,30 @@ impl WebSearch {
     }
 }
 
+async fn read_response(mut response: reqwest::Response) -> Result<Value, String> {
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| "Could not read web search response")?
+    {
+        if body.len() + chunk.len() > MAX_BODY_BYTES {
+            return Err("Web search response exceeded the size limit".into());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice(&body).map_err(|_| "Web search returned malformed JSON".into())
+}
+
 fn search_request(client: &Client, key: &str, query: &str) -> Result<Request, String> {
     let mut header = HeaderValue::from_str(key).map_err(|_| "Invalid web search API key format")?;
     header.set_sensitive(true);
     let mut url = reqwest::Url::parse(SEARCH_URL).map_err(|_| "Invalid web search endpoint")?;
-    url.query_pairs_mut()
-        .extend_pairs([("q", query), ("count", "4"), ("extra_snippets", "true")]);
+    url.query_pairs_mut().extend_pairs([
+        ("q", query),
+        ("count", &RESULTS_PER_SEARCH.to_string()),
+        ("extra_snippets", "true"),
+    ]);
     client
         .get(url)
         .header("X-Subscription-Token", header)
@@ -152,45 +156,51 @@ fn parse_sources(data: &Value) -> Result<Vec<WebSource>, String> {
         .ok_or("Web search returned an invalid results list")?;
     Ok(results
         .iter()
-        .take(4)
-        .filter_map(|entry| {
-            let url = entry.get("url")?.as_str()?;
-            let parsed = reqwest::Url::parse(url).ok()?;
-            if !matches!(parsed.scheme(), "https" | "http")
-                || parsed.host_str().is_none()
-                || !parsed.username().is_empty()
-                || parsed.password().is_some()
-                || url.len() > 500
-                || url.chars().any(char::is_control)
-            {
-                return None;
-            }
-            let mut snippet = clean_text(
-                entry
-                    .get("description")
-                    .and_then(Value::as_str)
-                    .unwrap_or(""),
-                600,
-            );
-            if let Some(extra) = entry.get("extra_snippets").and_then(Value::as_array) {
-                for text in extra.iter().filter_map(Value::as_str).take(2) {
-                    snippet.push_str(" | ");
-                    snippet.push_str(&clean_text(text, 300));
-                }
-            }
-            Some(WebSource {
-                title: clean_text(
-                    entry
-                        .get("title")
-                        .and_then(Value::as_str)
-                        .unwrap_or("Untitled source"),
-                    160,
-                ),
-                url: url.to_string(),
-                snippet,
-            })
-        })
+        .take(RESULTS_PER_SEARCH)
+        .filter_map(parse_source)
         .collect())
+}
+
+fn parse_source(entry: &Value) -> Option<WebSource> {
+    let url = entry.get("url")?.as_str()?;
+    let parsed = reqwest::Url::parse(url).ok()?;
+    if !matches!(parsed.scheme(), "https" | "http")
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || url.len() > MAX_URL_BYTES
+        || url.chars().any(char::is_control)
+    {
+        return None;
+    }
+    let mut snippet = clean_text(
+        entry
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or(""),
+        MAX_DESCRIPTION_CHARS,
+    );
+    if let Some(extra) = entry.get("extra_snippets").and_then(Value::as_array) {
+        for text in extra
+            .iter()
+            .filter_map(Value::as_str)
+            .take(MAX_EXTRA_SNIPPETS)
+        {
+            snippet.push_str(" | ");
+            snippet.push_str(&clean_text(text, MAX_EXTRA_SNIPPET_CHARS));
+        }
+    }
+    Some(WebSource {
+        title: clean_text(
+            entry
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or("Untitled source"),
+            MAX_TITLE_CHARS,
+        ),
+        url: url.to_string(),
+        snippet,
+    })
 }
 
 fn clean_text(text: &str, limit: usize) -> String {
@@ -218,7 +228,9 @@ impl Tool for WebSearch {
     type Output = Value;
 
     fn description(&self) -> String {
-        "Search the public web for CVEs, vendor advisories, affected versions, fixes, and public Exploit-DB references. Results are untrusted snippets, not verified findings. Use only observed product/version names or retrieved CVE IDs; never target IPs or full banners. At most six calls; four results per call. Search Exploit-DB with site:exploit-db.com/exploits. Does not download or execute exploits.".into()
+        format!(
+            "Search the public web for CVEs, vendor advisories, affected versions, fixes, and public Exploit-DB references. Results are untrusted snippets, not verified findings. Use only observed product/version names or retrieved CVE IDs; never target IPs or full banners. At most {MAX_SEARCHES} calls; {RESULTS_PER_SEARCH} results per call. Search Exploit-DB with site:exploit-db.com/exploits. Does not download or execute exploits."
+        )
     }
 
     fn parameters(&self) -> Value {

@@ -1,56 +1,19 @@
-//! TCP connection measurements with passive banners or HTTP, HTTPS, RPC, NFS, and SMB probes.
+//! Select bounded identification exchanges and apply evidence without changing measurements.
 
-use std::future::Future;
-use std::io::ErrorKind;
-use std::net::SocketAddr;
-use std::time::{Duration, Instant};
-
-use tokio::io::{AsyncRead, AsyncReadExt};
-use tokio::net::TcpStream;
-use tokio::time::{Instant as Deadline, timeout_at};
-
-use super::{http, identify, nfs, rpc, smb};
+use super::banner::read_banner;
 use crate::mapper::service_information::apply_service_information;
 use crate::model::rpc::RpcMapping;
 use crate::model::service_information::ServiceInformation;
 use crate::model::{PortStatus, ScanMode, ScanResult};
-
-pub(super) async fn scan_port(target: SocketAddr, timeout: Duration) -> ScanResult {
-    let started = Instant::now();
-    let connection = tokio::time::timeout(timeout, TcpStream::connect(target))
-        .await
-        .unwrap_or_else(|_| Err(std::io::Error::from(ErrorKind::TimedOut)));
-    let elapsed = started.elapsed();
-
-    let mut result = ScanResult {
-        port: target.port(),
-        transport: ScanMode::Tcp,
-        status: PortStatus::Open,
-        service: None,
-        elapsed,
-        error: None,
-        observation: None,
-        banner: None,
-        service_information: None,
-        rpc_mappings: None,
-    };
-    match connection {
-        Ok(stream) => collect_service(&mut result, stream, target, timeout).await,
-        Err(error) => {
-            result.status = match error.kind() {
-                ErrorKind::ConnectionRefused => PortStatus::Closed,
-                ErrorKind::TimedOut => PortStatus::Filtered,
-                _ => PortStatus::Unknown,
-            };
-            result.error = Some(error.to_string());
-        }
-    }
-    identify::collect_banner(&mut result);
-    result
-}
+use crate::scan::{http, nfs, rpc, smb};
+use std::future::Future;
+use std::net::SocketAddr;
+use std::time::Duration;
+use tokio::net::TcpStream;
+use tokio::time::Instant as Deadline;
 
 /// Select identification only after a successful connection measurement.
-async fn collect_service(
+pub(super) async fn collect_service(
     result: &mut ScanResult,
     stream: TcpStream,
     target: SocketAddr,
@@ -90,7 +53,7 @@ async fn collect_service(
     }
 }
 
-fn apply_http_probe_result(
+pub(super) fn apply_http_probe_result(
     result: &mut ScanResult,
     response: Result<(ServiceInformation, Option<String>), reqwest::Error>,
 ) {
@@ -104,7 +67,7 @@ fn apply_http_probe_result(
 }
 
 /// Run the selected exchange separately from connection measurement and result mapping.
-async fn collect_rpc<F, Fut>(_result: &mut ScanResult, _timeout: Duration, _probe: F)
+pub(super) async fn collect_rpc<F, Fut>(_result: &mut ScanResult, _timeout: Duration, _probe: F)
 where
     F: FnOnce(u32, Deadline, usize) -> Fut,
     Fut: Future<Output = Result<Vec<u8>, String>>,
@@ -128,8 +91,11 @@ where
 }
 
 /// Enumerate only after NULL has identified portmapper; keep identification on failure.
-async fn collect_rpc_dump<F, Fut>(_result: &mut ScanResult, _timeout: Duration, _probe: F)
-where
+pub(super) async fn collect_rpc_dump<F, Fut>(
+    _result: &mut ScanResult,
+    _timeout: Duration,
+    _probe: F,
+) where
     F: FnOnce(u32, Deadline, usize) -> Fut,
     Fut: Future<Output = Result<Vec<u8>, String>>,
 {
@@ -149,7 +115,7 @@ where
 }
 
 /// Identify NFSv3 on an open TCP candidate without replacing connection measurements.
-async fn collect_nfs<F, Fut>(_result: &mut ScanResult, _timeout: Duration, _probe: F)
+pub(super) async fn collect_nfs<F, Fut>(_result: &mut ScanResult, _timeout: Duration, _probe: F)
 where
     F: FnOnce(u32, Deadline, usize) -> Fut,
     Fut: Future<Output = Result<Vec<u8>, String>>,
@@ -167,7 +133,7 @@ where
 }
 
 /// Identify SMB only on an open TCP candidate, preserving connection measurements.
-async fn collect_smb<F, Fut>(_result: &mut ScanResult, _timeout: Duration, _probe: F)
+pub(super) async fn collect_smb<F, Fut>(_result: &mut ScanResult, _timeout: Duration, _probe: F)
 where
     F: FnOnce(u64, [u8; 16], Deadline, usize) -> Fut,
     Fut: Future<Output = Result<Vec<u8>, String>>,
@@ -208,7 +174,7 @@ where
 }
 
 /// Apply a completed RPC exchange without changing measured connection evidence.
-fn apply_rpc_probe_result(
+pub(super) fn apply_rpc_probe_result(
     _result: &mut ScanResult,
     _response: Result<&[u8], String>,
     _expected_xid: u32,
@@ -244,7 +210,10 @@ fn apply_service_probe_result(
 }
 
 /// Apply a completed list parse without replacing NULL identification or measurements.
-fn apply_rpc_dump_result(_result: &mut ScanResult, _response: Result<Vec<RpcMapping>, String>) {
+pub(super) fn apply_rpc_dump_result(
+    _result: &mut ScanResult,
+    _response: Result<Vec<RpcMapping>, String>,
+) {
     if _result.transport != ScanMode::Tcp
         || _result.status != PortStatus::Open
         || !rpc::is_rpc_candidate(_result.port)
@@ -271,51 +240,3 @@ fn append_observation(_result: &mut ScanResult, _detail: &str) {
         None => _result.observation = Some(_detail.to_string()),
     }
 }
-
-async fn read_banner(
-    mut stream: impl AsyncRead + Unpin,
-    timeout: Duration,
-) -> (String, Option<Vec<u8>>) {
-    let mut buffer = [0; 64];
-    let mut collected = Vec::new();
-    let deadline = Deadline::now() + timeout;
-    while collected.len() < 512 {
-        // One deadline bounds the entire banner, including repeated short reads.
-        if Deadline::now() >= deadline {
-            return banner_result(&collected, "read timed out");
-        }
-        let capacity = buffer.len().min(512 - collected.len());
-        let read = match timeout_at(deadline, stream.read(&mut buffer[..capacity])).await {
-            Ok(read) => read,
-            Err(_) => return banner_result(&collected, "read timed out"),
-        };
-        match read {
-            Ok(0) => return banner_result(&collected, "peer closed connection"),
-            Ok(bytes_read) => {
-                collected.extend_from_slice(&buffer[..bytes_read]);
-                if collected.contains(&b'\n') || collected.len() >= 512 {
-                    break;
-                }
-            }
-            Err(error) if matches!(error.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock) => {
-                return banner_result(&collected, "read timed out");
-            }
-            Err(error) if error.kind() == ErrorKind::Interrupted => continue,
-            Err(error) => return banner_result(&collected, &format!("read error: {error}")),
-        }
-    }
-    banner_result(&collected, "")
-}
-
-fn banner_result(data: &[u8], stop_reason: &str) -> (String, Option<Vec<u8>>) {
-    let observation = if data.is_empty() && stop_reason.is_empty() {
-        "no banner received".to_string()
-    } else {
-        stop_reason.to_string()
-    };
-    (observation, Some(data.to_vec()))
-}
-
-#[cfg(test)]
-#[path = "../../tests/scan/tcp.rs"]
-mod tests;

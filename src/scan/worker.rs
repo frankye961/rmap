@@ -62,18 +62,14 @@ where
 }
 
 fn failed_probe(target: SocketAddr, mode: ScanMode, started: Instant) -> ScanResult {
-    ScanResult {
-        port: target.port(),
-        transport: mode.transport(),
-        status: PortStatus::Unknown,
-        service: None,
-        elapsed: started.elapsed(),
-        error: Some("Probe task failed; port state is undetermined".into()),
-        observation: None,
-        banner: None,
-        service_information: None,
-        rpc_mappings: None,
-    }
+    let mut result = ScanResult::new(
+        target.port(),
+        mode.transport(),
+        PortStatus::Unknown,
+        started.elapsed(),
+    );
+    result.error = Some("Probe task failed; port state is undetermined".into());
+    result
 }
 
 #[cfg(test)]

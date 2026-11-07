@@ -334,11 +334,11 @@ fn exclusions_cannot_remove_every_selected_port() {
 #[test]
 fn parses_mixed_ports_and_inclusive_ranges_in_input_order() {
     assert_eq!(
-        super::parsing_ports_function("22,80-82,443").unwrap(),
+        super::ports::parse_ports("22,80-82,443").unwrap(),
         ["22", "80", "81", "82", "443"]
     );
     assert_eq!(
-        super::parsing_ports_function("443,80-82,81-83,22").unwrap(),
+        super::ports::parse_ports("443,80-82,81-83,22").unwrap(),
         ["443", "80", "81", "82", "81", "82", "83", "22"]
     );
 }
@@ -346,10 +346,10 @@ fn parses_mixed_ports_and_inclusive_ranges_in_input_order() {
 #[test]
 fn port_ranges_include_equal_endpoints_and_numeric_boundaries() {
     assert_eq!(
-        super::parsing_ports_function("1-1,65535-65535,080-082").unwrap(),
+        super::ports::parse_ports("1-1,65535-65535,080-082").unwrap(),
         ["1", "65535", "80", "81", "82"]
     );
-    let ports = super::parsing_ports_function("1-65535").unwrap();
+    let ports = super::ports::parse_ports("1-65535").unwrap();
     assert_eq!(ports.len(), 65_535);
     for (expected, actual) in (1..=u16::MAX).zip(&ports) {
         assert_eq!(*actual, expected.to_string());
@@ -379,7 +379,7 @@ fn rejects_reversed_zero_out_of_range_and_malformed_port_ranges() {
         "80-82,65536",
     ] {
         assert!(
-            super::parsing_ports_function(input).is_err(),
+            super::ports::parse_ports(input).is_err(),
             "accepted invalid port range input: {input:?}"
         );
     }
@@ -486,7 +486,7 @@ fn repeated_target_is_scheduled_only_once_for_both_transports() {
 #[test]
 fn cidr_helpers_parse_and_calculate_network_boundaries() {
     use std::net::Ipv4Addr;
-    let (address, prefix) = super::parsing_target_for_subnet("192.0.2.129/24").unwrap();
+    let (address, prefix) = super::targets::parse_subnet("192.0.2.129/24").unwrap();
     assert_eq!(address, Ipv4Addr::new(192, 0, 2, 129));
     assert_eq!(prefix, 24);
     for (prefix, first, last) in [
@@ -495,11 +495,11 @@ fn cidr_helpers_parse_and_calculate_network_boundaries() {
         (31, "192.0.2.128", "192.0.2.129"),
         (32, "192.0.2.129", "192.0.2.129"),
     ] {
-        let (network, broadcast) = super::calculate_subnet_boundaries(address, prefix);
+        let (network, broadcast) = super::targets::subnet_bounds(address, prefix);
         assert_eq!(network.to_string(), first);
         assert_eq!(broadcast.to_string(), last);
     }
-    assert!(super::parsing_target_for_subnet("192.0.2.1").is_err());
+    assert!(super::targets::parse_subnet("192.0.2.1").is_err());
 }
 
 #[test]
@@ -512,7 +512,7 @@ fn expands_cidr_and_mixed_targets_through_the_cli_for_both_transports() {
         assert_eq!(config.target, ["192.0.2.2", "192.0.2.1", "192.0.2.10"]);
         assert_eq!(config.ports, ["22", "80"]);
     }
-    let hosts = super::parsing_target_list("192.0.2.129/24").unwrap();
+    let hosts = super::targets::parse_targets("192.0.2.129/24").unwrap();
     assert_eq!(hosts.len(), 254);
     assert_eq!(hosts.first().map(String::as_str), Some("192.0.2.1"));
     assert_eq!(hosts.last().map(String::as_str), Some("192.0.2.254"));
@@ -529,7 +529,7 @@ fn includes_slash_31_and_32_endpoints_without_overflow() {
         ("255.255.255.255/32", vec!["255.255.255.255"]),
         ("0.0.0.0/32", vec!["0.0.0.0"]),
     ] {
-        assert_eq!(super::parsing_target_list(input).unwrap(), expected);
+        assert_eq!(super::targets::parse_targets(input).unwrap(), expected);
     }
 }
 
@@ -560,35 +560,35 @@ fn rejects_invalid_cidr_inputs_through_cli_before_scanning() {
 #[test]
 fn bounds_unique_targets_before_large_subnet_expansion() {
     for input in ["0.0.0.0/0", "198.18.0.0/19"] {
-        let error = super::parsing_target_list(input).unwrap_err();
+        let error = super::targets::parse_targets(input).unwrap_err();
         assert!(error.contains("4096"));
     }
     let at_limit = "198.18.0.0/20,198.18.16.0,198.18.16.1";
     assert_eq!(
-        super::parsing_target_list(at_limit).unwrap().len(),
-        super::MAX_TARGETS
+        super::targets::parse_targets(at_limit).unwrap().len(),
+        crate::settings::MAX_TARGETS
     );
     // Duplicates at the limit must remain valid, including an overlapping subnet.
     let duplicate = format!("{at_limit},198.18.16.1,198.18.0.1/30");
     assert_eq!(
-        super::parsing_target_list(&duplicate).unwrap().len(),
-        super::MAX_TARGETS
+        super::targets::parse_targets(&duplicate).unwrap().len(),
+        crate::settings::MAX_TARGETS
     );
     let too_many = format!("{at_limit},198.18.16.2");
     assert!(
-        super::parsing_target_list(&too_many)
+        super::targets::parse_targets(&too_many)
             .unwrap_err()
             .contains("4096")
     );
 
-    let individual: Vec<String> = (0..=super::MAX_TARGETS as u32)
+    let individual: Vec<String> = (0..=crate::settings::MAX_TARGETS as u32)
         .map(|offset| {
             std::net::Ipv4Addr::from(u32::from(std::net::Ipv4Addr::new(198, 18, 0, 0)) + offset)
                 .to_string()
         })
         .collect();
     assert!(
-        super::parsing_target_list(&individual.join(","))
+        super::targets::parse_targets(&individual.join(","))
             .unwrap_err()
             .contains("4096")
     );

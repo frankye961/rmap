@@ -138,3 +138,11 @@ This example has not been run during offline validation.
 - [Tokio: write_all](https://docs.rs/tokio/latest/tokio/io/trait.AsyncWriteExt.html#method.write_all) and [read_exact](https://docs.rs/tokio/latest/tokio/io/trait.AsyncReadExt.html#method.read_exact).
 - [Tokio: timeout_at](https://docs.rs/tokio/latest/tokio/time/fn.timeout_at.html).
 - [Rust: OnceLock](https://doc.rust-lang.org/std/sync/struct.OnceLock.html).
+
+## Source organization
+
+`src/scan/smb/mod.rs` owns candidate selection and the shared client GUID.
+`request.rs` builds and encodes the typed request, `transport.rs` handles Direct
+TCP framing and bounded I/O, and `reply.rs` validates and maps negotiation
+evidence. Fixed values stay in `constants.rs`; request models are grouped in
+`src/model/smb/`. See the [project layout](project-layout.md).

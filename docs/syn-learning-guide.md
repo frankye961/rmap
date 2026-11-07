@@ -10,7 +10,7 @@ socket setup, packet construction, checksums, asynchronous sending, receiving,
 and reply parsing, validation, and classification.
 The earlier TCP scanner and banner grabbing are explained briefly for context.
 
-Version 0.5.5 includes automatic HTTP probing on TCP connect ports 80, 8000,
+Version 0.5.6 includes automatic HTTP probing on TCP connect ports 80, 8000,
 8080, and 8888, HTTPS probing on 443 and 8443, and portmapper NULL identification
 followed by DUMP enumeration on TCP port 111. This application identification
 is separate from the SYN scanner covered here. See
@@ -1259,3 +1259,11 @@ for `RLIMIT_NOFILE` and `EMFILE`, and
 [/proc/pid/limits](https://man7.org/linux/man-pages/man5/proc_pid_limits.5.html)
 for the soft/hard limit format. In your terminal, `ulimit -Sn` displays the soft
 descriptor limit inherited by processes started from that shell.
+
+## Constants and presentation after the module cleanup
+
+Shared TCP header sizes, flags, window size and cleanup budget are now named in
+`src/scan/syn/constants.rs`. Packet construction and reply matching use those
+values together. The algorithms described above are unchanged. Console output
+and progress live under `src/report/`, apart from the data models. The complete
+module map and test layout are in [project layout](project-layout.md).

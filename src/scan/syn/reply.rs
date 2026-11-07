@@ -1,5 +1,6 @@
 //! Correlate validated replies and preserve measurements through bounded cleanup.
 
+use super::constants::{CLEANUP_TIMEOUT_MS, FLAG_ACK, FLAG_FIN, FLAG_RST, FLAG_SYN};
 use super::packet::{parse_ipv4_packet, parse_tcp_reply};
 use super::unknown_result;
 use crate::mapper::syn::map_syn_result;
@@ -96,7 +97,8 @@ where
     C: FnMut(TcpReply, tokio::time::Instant) -> CF,
     CF: Future<Output = std::io::Result<()>>,
 {
-    let deadline = _deadline.min(tokio::time::Instant::now() + Duration::from_millis(100));
+    let deadline =
+        _deadline.min(tokio::time::Instant::now() + Duration::from_millis(CLEANUP_TIMEOUT_MS));
     match tokio::time::timeout_at(deadline, _cleanup(_reply, deadline)).await {
         Ok(Ok(())) => None,
         Ok(Err(error)) => Some(error.to_string()),
@@ -142,7 +144,7 @@ pub(super) fn match_syn_reply(
 
     let expected_ack = _probe.sequence_number.wrapping_add(1);
 
-    if _reply.flags & 0x10 == 0 {
+    if _reply.flags & FLAG_ACK == 0 {
         return Ok(false);
     }
 
@@ -156,10 +158,10 @@ pub(super) fn match_syn_reply(
 /// Classify an already validated and matched reply. Return None for a flag
 /// combination that does not establish a supported outcome; timeouts are handled separately.
 pub(super) fn classify_syn_reply(_reply: &TcpReply) -> Result<Option<PortStatus>, String> {
-    let _fin = _reply.flags & 0x01 != 0;
-    let _syn = _reply.flags & 0x02 != 0;
-    let _rst = _reply.flags & 0x04 != 0;
-    let _ack = _reply.flags & 0x10 != 0;
+    let _fin = _reply.flags & FLAG_FIN != 0;
+    let _syn = _reply.flags & FLAG_SYN != 0;
+    let _rst = _reply.flags & FLAG_RST != 0;
+    let _ack = _reply.flags & FLAG_ACK != 0;
 
     if !_ack || _fin || _syn == _rst {
         return Ok(None);

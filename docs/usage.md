@@ -60,8 +60,26 @@ rmap --help
 Cargo's installation directory, usually `~/.cargo/bin`, must be on `PATH`. Reinstall after source changes when invoking the installed `rmap`; building the project alone does not update that executable.
 
 After installation, `rmap --help` prints the startup banner with version
-`v0.5.5` without starting a scan. The same check can be made directly with
+`v0.5.6` without starting a scan. The same check can be made directly with
 `./target/release/rmap --help`.
+
+## CLI options
+
+| Option | Meaning |
+| --- | --- |
+| `--tcp` | Select TCP; normal connect scanning unless `--syn` is also supplied (TCP is the default) |
+| `--udp` | Send an empty UDP probe to each selected port and wait for a response |
+| `--syn` | Run IPv4 TCP SYN discovery using Linux raw sockets; requires `CAP_NET_RAW`, no banner grabbing |
+| `--target TARGET[,TARGET...]` | IPv4 addresses and CIDR subnets; at most 4,096 unique targets, deduplicated in first-occurrence order; hostnames and IPv6 are not accepted |
+| `--ports LIST` | Comma-separated ports and inclusive ranges, such as `22,80-82,443`; omitting it selects all ports from 1 through 65535 |
+| `--exclude-ports LIST` | Ports and inclusive ranges to remove from an earlier explicit `--ports` list; may be given once and must leave at least one selected port |
+| `--timeout-ms MILLISECONDS` | Optional positive timeout for network operations; defaults to `1000` ms |
+| `--concurrency N` | Maximum simultaneous probes; defaults to `256`, accepts `1` through `1024` |
+| `--ai` | Request DeepSeek interpretation after the scan report |
+| `--help`, `-h` | Show command syntax without scanning |
+
+Only `--target` is required. Without a transport flag, rmap uses TCP. Without `--ports`, it selects ports 1–65535. Without `--timeout-ms`, it uses 1000 ms. `--tcp` and `--udp` cannot be combined or repeated. `--syn` can be supplied alone or with `--tcp` in either order; it cannot be repeated or combined with `--udp`. Explicit `--ports` and `--timeout-ms` flags still require valid, nonempty values; invalid input stops the run before any connection attempt.
+
 
 ## Select TCP connect, TCP SYN, or UDP
 
@@ -82,7 +100,7 @@ Reset cleanup has at most 100 ms of the remaining probe deadline. Setup time is
 included in elapsed measurements but precedes the timeout budget. No ICMP error
 interpretation, unanswered-probe retries, or live performance validation is
 included. Use a small explicit port list and low concurrency for initial
-authorized validation. See [README SYN mode](../README.md#tcp-syn-scanning).
+authorized validation. See [SYN learning guide](syn-learning-guide.md).
 
 ```bash
 rmap --target 192.0.2.10,192.0.2.11,192.0.2.10 --ports 22,80-82
@@ -236,7 +254,7 @@ AI settings are validated before scanning so configuration errors are visible ea
 
 Research is bounded to eight observed outcomes, six search calls, four results per search, and eight model calls. Open ports receive priority in the observation limit. A scan of more ports can therefore display measurements that do not reach the AI prompt. The total AI timeout includes tool and model calls; increase an existing 15000 ms setting when needed for research.
 
-See the [README's recorded TCP run](../README.md#example-tcp-scan-with-ai-research). Its full console output is under the expandable “Recorded console output” section. The example is recorded model output and may contain incorrect or incomplete conclusions.
+See the [recorded TCP run](examples.md). Its full console output is under the expandable “Recorded console output” section. The example is recorded model output and may contain incorrect or incomplete conclusions.
 
 ## Troubleshooting
 

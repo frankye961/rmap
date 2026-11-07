@@ -1,5 +1,6 @@
 //! Linux socket setup and nonblocking packet I/O through Tokio readiness.
 
+use super::constants::{MAX_IPV4_PACKET_BYTES, TCP_HEADER_BYTES};
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
 
@@ -86,7 +87,7 @@ async fn wait_ready(
 /// Send the supplied 20-byte TCP header unchanged, whether SYN or RST.
 pub(super) async fn send_tcp_header(
     _socket: &AsyncFd<Socket>,
-    _header: &[u8; 20],
+    _header: &[u8; TCP_HEADER_BYTES],
     _destination_ip: Ipv4Addr,
     _deadline: tokio::time::Instant,
 ) -> io::Result<()> {
@@ -113,7 +114,7 @@ pub(super) async fn receive_raw_packet(
     _socket: &AsyncFd<Socket>,
     _deadline: tokio::time::Instant,
 ) -> io::Result<Vec<u8>> {
-    let mut buffer = [std::mem::MaybeUninit::<u8>::uninit(); 65_535];
+    let mut buffer = [std::mem::MaybeUninit::<u8>::uninit(); MAX_IPV4_PACKET_BYTES];
     loop {
         let mut guard = wait_ready(_socket, _deadline, Interest::READABLE).await?;
         match guard.try_io(|socket| socket.get_ref().recv(&mut buffer)) {

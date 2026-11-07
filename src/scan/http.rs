@@ -11,18 +11,21 @@ use reqwest::{
 
 use super::identify;
 use crate::model::service_information::ServiceInformation;
-use crate::utils::banner::escape_bytes;
+use crate::utils::banner::{PREVIEW_BYTES, escape_bytes};
+
+const HTTP_PORTS: &[u16] = &[80, 8000, 8080, 8888];
+const HTTPS_PORTS: &[u16] = &[443, 8443];
 
 /// Decide whether an open port is a candidate for a plain HTTP probe.
 ///
 /// Select a probe using the port as a hint; the response establishes the service.
 pub(super) fn is_http_candidate(_port: u16) -> bool {
-    matches!(_port, 80 | 8000 | 8080 | 8888)
+    HTTP_PORTS.contains(&_port)
 }
 
 /// Select a TLS-wrapped HTTP probe; the port alone does not identify HTTPS.
 pub(super) fn is_https_candidate(_port: u16) -> bool {
-    matches!(_port, 443 | 8443)
+    HTTPS_PORTS.contains(&_port)
 }
 
 fn client(timeout: Duration) -> Result<Client, reqwest::Error> {
@@ -52,7 +55,7 @@ fn probe_request(client: &Client, target: SocketAddr) -> Result<Request, reqwest
 
 fn server_observation(server: Option<&HeaderValue>) -> Option<String> {
     server.map(|server| {
-        let server_preview = escape_bytes(server.as_bytes(), 64);
+        let server_preview = escape_bytes(server.as_bytes(), PREVIEW_BYTES);
         format!("Server: {server_preview}")
     })
 }

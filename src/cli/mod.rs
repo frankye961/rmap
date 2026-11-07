@@ -1,246 +1,165 @@
-//! CLI parsing and input validation.
+//! CLI parsing, with port and target validation separated from option handling.
 
-use std::collections::HashSet;
-use std::net::Ipv4Addr;
+use std::slice::Iter;
 use std::time::Duration;
 
 mod config;
+mod help;
+mod ports;
+mod targets;
+
+use crate::model::ScanMode;
+use crate::settings::{DEFAULT_CONCURRENCY, DEFAULT_TIMEOUT_MS, MAX_CONCURRENCY};
 pub use config::CliConfig;
+pub use help::usage;
 
-use crate::model::{DEFAULT_CONCURRENCY, MAX_CONCURRENCY, ScanMode};
-
-const MAX_TARGETS: usize = 4096;
-
-pub const USAGE: &str = "Usage: rmap --target TARGET[,TARGET...] [--tcp | --udp] [--syn] [--ports LIST] [--exclude-ports LIST] [--timeout-ms MILLISECONDS] [--concurrency N] [--ai]\n--syn selects TCP SYN scanning, optionally with --tcp; it cannot be combined with --udp. Linux raw sockets require CAP_NET_RAW; no application banners are collected.\nDefaults: TCP, all ports from 1 to 65535, timeout 1000 ms, concurrency 256 (1-1024).\nFull-range scans and --ports lists containing ranges show only open ports; individual-port lists show all outcomes.\nPort lists accept individual ports and inclusive ranges, e.g. 22,80-82,443.\nTargets accept IPv4 addresses and CIDR subnets; at most 4096 unique targets. Targets are scanned once each, in first-occurrence order.\n--exclude-ports requires an earlier --ports list and must leave at least one port.";
+#[derive(Default)]
+struct Options {
+    target: Option<Vec<String>>,
+    ports: Option<Vec<String>>,
+    open_only: Option<bool>,
+    exclude_ports_seen: bool,
+    timeout: Option<Duration>,
+    use_ai: bool,
+    concurrency: Option<usize>,
+    mode: Option<ScanMode>,
+    use_syn: bool,
+}
 
 pub fn parse_cli(args: &[String]) -> Result<CliConfig, String> {
-    let mut target = None;
-    let mut ports = None;
-    let mut open_only = true;
-    let mut exclude_ports_seen = false;
-    let mut timeout = None;
-    let mut use_ai = false;
-    let mut concurrency = None;
-    let mut mode = None;
-    let mut use_syn = false;
+    let mut options = Options::default();
     let mut args = args.iter();
-
     while let Some(flag) = args.next() {
-        match flag.as_str() {
-            "--tcp" | "--udp" => {
-                let selected = if flag == "--tcp" {
-                    ScanMode::Tcp
-                } else {
-                    ScanMode::Udp
-                };
-                if mode.replace(selected).is_some() {
-                    return Err("Specify --tcp or --udp only once; they cannot be combined".into());
-                }
-            }
-            "--syn" => {
-                if use_syn {
-                    return Err("--syn was given more than once".into());
-                }
-                use_syn = true;
-            }
+        options.parse_option(flag, &mut args)?;
+    }
+    options.finish()
+}
+
+impl Options {
+    fn parse_option(&mut self, flag: &str, args: &mut Iter<'_, String>) -> Result<(), String> {
+        match flag {
+            "--tcp" | "--udp" => self.set_mode(flag),
+            "--syn" => set_flag(&mut self.use_syn, flag),
+            "--ai" => set_flag(&mut self.use_ai, flag),
             "--target" => {
-                let value = args.next().ok_or("Missing value for --target")?;
-                let address = parsing_target_list(value)?;
-                if target.replace(address).is_some() {
-                    return Err("--target was given more than once".to_string());
-                }
+                let targets = targets::parse_targets(next_value(args, flag)?)?;
+                set_once(&mut self.target, targets, flag)
             }
             "--ports" => {
-                let value = args.next().ok_or("Missing value for --ports")?;
-                let parsed_ports = parsing_ports_function(value)?;
-                open_only = value.contains('-');
-                if ports.replace(parsed_ports).is_some() {
-                    return Err("--ports was given more than once".to_string());
-                }
+                let value = next_value(args, flag)?;
+                let ports = ports::parse_ports(value)?;
+                self.open_only = Some(value.contains('-'));
+                set_once(&mut self.ports, ports, flag)
             }
-            "--exclude-ports" => {
-                if exclude_ports_seen {
-                    return Err("--exclude-ports was given more than once".to_string());
-                }
-                exclude_ports_seen = true;
-                if ports.is_none() {
-                    return Err(
-                        "--exclude-ports requires --ports to be specified first".to_string()
-                    );
-                }
-                let value = args
-                    .next()
-                    .filter(|value| !value.starts_with("--"))
-                    .ok_or("Missing value for --exclude-ports")?;
-                let excluded_ports = parsing_ports_function(value)?;
-                if let Some(ref mut existing_ports) = ports {
-                    existing_ports.retain(|p| !excluded_ports.contains(p));
-                    if existing_ports.is_empty() {
-                        return Err("--exclude-ports leaves no ports to scan".to_string());
-                    }
-                }
-            }
+            "--exclude-ports" => self.exclude_ports(args),
             "--timeout-ms" => {
-                let value = args.next().ok_or("Missing value for --timeout-ms")?;
-                let milliseconds = value
-                    .parse::<u64>()
-                    .map_err(|_| "--timeout-ms must be a positive integer")?;
-                if milliseconds == 0 {
-                    return Err("--timeout-ms must be greater than zero".to_string());
-                }
-                if timeout
-                    .replace(Duration::from_millis(milliseconds))
-                    .is_some()
-                {
-                    return Err("--timeout-ms was given more than once".to_string());
-                }
+                let timeout = parse_timeout(next_value(args, flag)?)?;
+                set_once(&mut self.timeout, timeout, flag)
             }
             "--concurrency" => {
-                let value = args.next().ok_or("Missing value for --concurrency")?;
-                let limit = value
-                    .parse::<usize>()
-                    .map_err(|_| "--concurrency must be an integer from 1 to 1024")?;
-                if !(1..=MAX_CONCURRENCY).contains(&limit) {
-                    return Err(format!(
-                        "--concurrency must be between 1 and {MAX_CONCURRENCY}"
-                    ));
-                }
-                if concurrency.replace(limit).is_some() {
-                    return Err("--concurrency was given more than once".into());
-                }
+                let limit = parse_concurrency(next_value(args, flag)?)?;
+                set_once(&mut self.concurrency, limit, flag)
             }
-            "--ai" => {
-                if use_ai {
-                    return Err("--ai was given more than once".into());
-                }
-                use_ai = true;
-            }
-            _ => return Err(format!("Unknown option: {flag}")),
+            _ => Err(format!("Unknown option: {flag}")),
         }
     }
 
-    let mode = if use_syn {
-        if mode == Some(ScanMode::Udp) {
-            return Err("--syn applies to TCP and cannot be combined with --udp".into());
-        }
-        ScanMode::Syn
-    } else {
-        mode.unwrap_or(ScanMode::Tcp)
-    };
-
-    Ok(CliConfig {
-        target: target.ok_or("Missing --target")?,
-        open_only,
-        ports: ports.unwrap_or_else(|| (1..=u16::MAX).map(|port| port.to_string()).collect()),
-        timeout: timeout.unwrap_or(Duration::from_millis(1000)),
-        mode,
-        use_ai,
-        concurrency: concurrency.unwrap_or(DEFAULT_CONCURRENCY),
-    })
-}
-
-fn parsing_ports_function(s: &str) -> Result<Vec<String>, String> {
-    let mut ports = Vec::new();
-    for item in s.split(',') {
-        if let Some((start, end)) = item.split_once('-') {
-            let start_port = start
-                .parse::<u16>()
-                .map_err(|_| format!("Invalid port number: {start}"))?;
-            let end_port = end
-                .parse::<u16>()
-                .map_err(|_| format!("Invalid port number: {end}"))?;
-            if start_port == 0 || end_port == 0 || start_port > end_port {
-                return Err(format!("Invalid port range: {item}"));
-            }
-            for port in start_port..=end_port {
-                ports.push(port.to_string());
-            }
+    fn set_mode(&mut self, flag: &str) -> Result<(), String> {
+        let selected = if flag == "--tcp" {
+            ScanMode::Tcp
         } else {
-            let port = item
-                .parse::<u16>()
-                .map_err(|_| format!("Invalid port number: {item}"))?;
-            if port == 0 {
-                return Err("Ports must be between 1 and 65535".to_string());
-            }
-            ports.push(port.to_string());
-        }
-    }
-    Ok(ports)
-}
-
-fn parsing_target_list(targets: &str) -> Result<Vec<String>, String> {
-    let mut valid_targets = Vec::new();
-    let mut seen = HashSet::new();
-    for target in targets.split(',') {
-        let (first, last) = if target.contains('/') {
-            let (address, prefix) = parsing_target_for_subnet(target)?;
-            let (network, broadcast) = calculate_subnet_boundaries(address, prefix);
-            let first = u32::from(network);
-            let last = u32::from(broadcast);
-            // /31 includes both endpoints; /32 includes its single address.
-            if prefix < 31 {
-                (first + 1, last - 1)
-            } else {
-                (first, last)
-            }
-        } else {
-            let address = target
-                .parse::<Ipv4Addr>()
-                .map_err(|_| format!("Invalid IPv4 address: {target}"))?;
-            let address = u32::from(address);
-            (address, address)
+            ScanMode::Udp
         };
-        // Count in u64 so /0 cannot overflow; reject oversized subnets before expansion.
-        let count = u64::from(last) - u64::from(first) + 1;
-        if count > MAX_TARGETS as u64 {
-            return Err(format!(
-                "Target subnet {target} exceeds the limit of {MAX_TARGETS} unique targets"
-            ));
+        if self.mode.replace(selected).is_some() {
+            return Err("Specify --tcp or --udp only once; they cannot be combined".into());
         }
-        for address in first..=last {
-            let address = Ipv4Addr::from(address);
-            if seen.insert(address) {
-                if valid_targets.len() == MAX_TARGETS {
-                    return Err(format!(
-                        "Target list exceeds the limit of {MAX_TARGETS} unique targets"
-                    ));
-                }
-                valid_targets.push(address.to_string());
+        Ok(())
+    }
+
+    fn exclude_ports(&mut self, args: &mut Iter<'_, String>) -> Result<(), String> {
+        set_flag(&mut self.exclude_ports_seen, "--exclude-ports")?;
+        let ports = self
+            .ports
+            .as_mut()
+            .ok_or("--exclude-ports requires --ports to be specified first")?;
+        let value = args
+            .next()
+            .filter(|value| !value.starts_with("--"))
+            .ok_or("Missing value for --exclude-ports")?;
+        let excluded = ports::parse_ports(value)?;
+        ports.retain(|port| !excluded.contains(port));
+        if ports.is_empty() {
+            return Err("--exclude-ports leaves no ports to scan".into());
+        }
+        Ok(())
+    }
+
+    fn finish(self) -> Result<CliConfig, String> {
+        let mode = if self.use_syn {
+            if self.mode == Some(ScanMode::Udp) {
+                return Err("--syn applies to TCP and cannot be combined with --udp".into());
             }
-        }
+            ScanMode::Syn
+        } else {
+            self.mode.unwrap_or(ScanMode::Tcp)
+        };
+        Ok(CliConfig {
+            target: self.target.ok_or("Missing --target")?,
+            ports: self
+                .ports
+                .unwrap_or_else(|| (1..=u16::MAX).map(|port| port.to_string()).collect()),
+            open_only: self.open_only.unwrap_or(true),
+            timeout: self
+                .timeout
+                .unwrap_or(Duration::from_millis(DEFAULT_TIMEOUT_MS)),
+            mode,
+            use_ai: self.use_ai,
+            concurrency: self.concurrency.unwrap_or(DEFAULT_CONCURRENCY),
+        })
     }
-    Ok(valid_targets)
 }
 
-fn parsing_target_for_subnet(target: &str) -> Result<(Ipv4Addr, u8), String> {
-    let (address_str, prefix) = target
-        .split_once('/')
-        .ok_or_else(|| format!("Invalid subnet format: {target}"))?;
-    let address = address_str
-        .parse::<Ipv4Addr>()
-        .map_err(|_| format!("Invalid IPv4 address: {address_str}"))?;
-    let prefix_length = prefix
-        .parse::<u8>()
-        .map_err(|_| format!("Invalid subnet prefix length: {prefix}"))?;
-
-    if prefix_length > 32 {
-        return Err(format!("Invalid subnet prefix length: {prefix_length}"));
-    }
-    Ok((address, prefix_length))
+fn next_value<'a>(args: &mut Iter<'a, String>, flag: &str) -> Result<&'a str, String> {
+    args.next()
+        .map(String::as_str)
+        .ok_or_else(|| format!("Missing value for {flag}"))
 }
 
-fn calculate_subnet_boundaries(address: Ipv4Addr, prefix_length: u8) -> (Ipv4Addr, Ipv4Addr) {
-    if prefix_length > 32 {
-        panic!("Invalid subnet prefix length: {prefix_length}");
+fn set_once<T>(slot: &mut Option<T>, value: T, flag: &str) -> Result<(), String> {
+    if slot.replace(value).is_some() {
+        return Err(format!("{flag} was given more than once"));
     }
-    let mask = if prefix_length == 0 {
-        0
-    } else {
-        u32::MAX << (32 - prefix_length)
-    };
-    let network = u32::from(address) & mask;
-    let broadcast = network | !mask;
-    (Ipv4Addr::from(network), Ipv4Addr::from(broadcast))
+    Ok(())
+}
+
+fn set_flag(slot: &mut bool, flag: &str) -> Result<(), String> {
+    if *slot {
+        return Err(format!("{flag} was given more than once"));
+    }
+    *slot = true;
+    Ok(())
+}
+
+fn parse_timeout(value: &str) -> Result<Duration, String> {
+    let milliseconds = value
+        .parse::<u64>()
+        .map_err(|_| "--timeout-ms must be a positive integer")?;
+    if milliseconds == 0 {
+        return Err("--timeout-ms must be greater than zero".into());
+    }
+    Ok(Duration::from_millis(milliseconds))
+}
+
+fn parse_concurrency(value: &str) -> Result<usize, String> {
+    let limit = value
+        .parse::<usize>()
+        .map_err(|_| format!("--concurrency must be an integer from 1 to {MAX_CONCURRENCY}"))?;
+    if !(1..=MAX_CONCURRENCY).contains(&limit) {
+        return Err(format!(
+            "--concurrency must be between 1 and {MAX_CONCURRENCY}"
+        ));
+    }
+    Ok(limit)
 }
 
 #[cfg(test)]

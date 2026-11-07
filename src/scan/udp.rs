@@ -7,22 +7,18 @@ use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
 
 use crate::model::{PortStatus, ScanMode, ScanResult};
-use crate::utils::banner::escape_bytes;
+use crate::utils::banner::{PREVIEW_BYTES, escape_bytes};
+
+const RESPONSE_BUFFER_BYTES: usize = 1024;
 
 pub(super) async fn scan_port(target: SocketAddr, timeout: Duration) -> ScanResult {
     let started = Instant::now();
-    let mut result = ScanResult {
-        port: target.port(),
-        transport: ScanMode::Udp,
-        status: PortStatus::Unknown,
-        service: None,
-        elapsed: Duration::ZERO,
-        error: None,
-        observation: None,
-        banner: None,
-        service_information: None,
-        rpc_mappings: None,
-    };
+    let mut result = ScanResult::new(
+        target.port(),
+        ScanMode::Udp,
+        PortStatus::Unknown,
+        Duration::ZERO,
+    );
     match probe(target, timeout).await {
         Ok((status, observation)) => {
             result.status = status;
@@ -47,7 +43,7 @@ async fn probe(target: SocketAddr, timeout: Duration) -> Result<(PortStatus, Str
         .await
         .map_err(|_| "UDP send timed out".to_string())?
         .map_err(|error| format!("Failed to send UDP probe: {error}"))?;
-    let mut buffer = [0u8; 1024];
+    let mut buffer = [0u8; RESPONSE_BUFFER_BYTES];
     let response = tokio::time::timeout(timeout, socket.recv(&mut buffer))
         .await
         .unwrap_or_else(|_| Err(io::Error::from(ErrorKind::TimedOut)));
@@ -57,12 +53,12 @@ async fn probe(target: SocketAddr, timeout: Duration) -> Result<(PortStatus, Str
 fn classify_response(response: io::Result<usize>, buffer: &[u8]) -> (PortStatus, String) {
     match response {
         Ok(size) => {
-            let preview = escape_bytes(&buffer[..size], 64);
+            let preview = escape_bytes(&buffer[..size], PREVIEW_BYTES);
             let detail = if size == 0 {
                 "empty UDP response".into()
             } else if size >= buffer.len() {
                 format!("{preview} (preview truncated; datagram may also be truncated)")
-            } else if size > 64 {
+            } else if size > PREVIEW_BYTES {
                 format!("{preview} (preview truncated)")
             } else {
                 preview

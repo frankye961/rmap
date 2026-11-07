@@ -7,98 +7,79 @@ mod ai;
 mod cli;
 mod mapper;
 mod model;
+mod report;
 mod scan;
+mod settings;
 mod utils;
 
-const BANNER: &str = r#"
-      \       /
-   ___ \_____/ ___
-  /   \(o   o)/   \
-  \___/  ___  \___/
-      \ (___) /
-     __\_____/__
-    / /       \ \
-   (_/         \_)
-
-  RRRRR   M   M    AAA    PPPPP
-  R    R  MM MM   A   A   P    P
-  R    R  M M M  AAAAAAA  P    P
-  RRRRR   M   M  A     A  PPPPP
-  R   R   M   M  A     A  P
-  R    R  M   M  A     A  P
-"#;
-
 fn main() {
-    print_banner();
-
+    report::print_banner();
     let args: Vec<String> = env::args().skip(1).collect();
     if args.len() == 1 && matches!(args[0].as_str(), "--help" | "-h") {
-        println!("{}", cli::USAGE);
+        println!("{}", cli::usage());
         return;
     }
+    let config = cli::parse_cli(&args).unwrap_or_else(|error| {
+        eprintln!("{error}\n{}", cli::usage());
+        process::exit(2);
+    });
+    if let Err(error) = run(&config) {
+        eprintln!("{error}");
+        process::exit(1);
+    }
+}
 
-    let cli::CliConfig {
-        target: targets,
-        ports,
-        open_only,
-        timeout,
-        mode,
-        use_ai,
-        concurrency,
-    } = match cli::parse_cli(&args) {
-        Ok(config) => config,
-        Err(error) => {
-            eprintln!("{error}\n{}", cli::USAGE);
-            process::exit(2);
-        }
-    };
-
-    let ai_config = if use_ai {
-        match ai::config::AiConfig::load() {
-            Ok(config) => Some(config),
-            Err(error) => {
-                eprintln!("AI analysis unavailable: {error}");
-                None
-            }
-        }
-    } else {
-        None
-    };
-    let port_refs: Vec<&str> = ports.iter().map(String::as_str).collect();
-    for target in targets {
-        let mut progress =
-            model::progress::ScanProgress::new(&target, mode, ports.len(), timeout, concurrency);
-        let results = match scan::scan(
-            mode,
+fn run(config: &cli::CliConfig) -> Result<(), String> {
+    let ai_config = load_ai_config(config.use_ai);
+    let ports: Vec<&str> = config.ports.iter().map(String::as_str).collect();
+    for target in &config.target {
+        let mut progress = report::progress::ScanProgress::new(
+            target,
+            config.mode,
+            ports.len(),
+            config.timeout,
+            config.concurrency,
+        );
+        let results = scan::scan(
+            config.mode,
             target.clone(),
-            timeout,
-            &port_refs,
-            concurrency,
+            config.timeout,
+            &ports,
+            config.concurrency,
             |completed, result| progress.update(completed, result),
-        ) {
-            Ok(results) => results,
-            Err(error) => {
-                eprintln!("{error}");
-                process::exit(1);
-            }
-        };
-        model::report::print_results(&target, &results, open_only);
-        if let Some(config) = ai_config.as_ref() {
-            eprintln!(
-                "Starting AI web research and interpretation for {target} (session timeout: {} ms).",
-                config.timeout.as_millis()
-            );
-            match ai::service::analyze(config, &results) {
-                Ok(analysis) => model::report::print_ai_analysis(&analysis),
-                Err(error) => eprintln!("\nAI analysis unavailable: {error}"),
-            }
+        )?;
+        report::print_results(target, &results, config.open_only);
+        if let Some(ai_config) = ai_config.as_ref() {
+            print_interpretation(target, ai_config, &results);
+        }
+    }
+    Ok(())
+}
+
+fn load_ai_config(enabled: bool) -> Option<ai::config::AiConfig> {
+    if !enabled {
+        return None;
+    }
+    match ai::config::AiConfig::load() {
+        Ok(config) => Some(config),
+        Err(error) => {
+            eprintln!("AI analysis unavailable: {error}");
+            None
         }
     }
 }
 
-fn print_banner() {
-    println!(
-        "{BANNER}\n  v{} - Rust network scanner with optional AI interpretation.\n",
-        env!("CARGO_PKG_VERSION")
+fn print_interpretation(
+    target: &str,
+    config: &ai::config::AiConfig,
+    results: &[model::ScanResult],
+) {
+    eprintln!(
+        "Starting AI web research and interpretation for {target} (session timeout: {} ms).",
+        config.timeout.as_millis()
     );
+    match ai::service::analyze(config, results) {
+        Ok(analysis) => report::print_ai_analysis(&analysis),
+        Err(error) => eprintln!("\nAI analysis unavailable: {error}"),
+    }
 }

@@ -6,6 +6,8 @@ use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use super::constants::DEFAULT_TIMEOUT_MS;
+
 pub struct AiConfig {
     pub api_key: String,
     pub base_url: Option<String>,
@@ -44,7 +46,7 @@ impl AiConfig {
             return Err("RMAP_AI_BASE_URL must start with http:// or https://".into());
         }
         let timeout_ms = setting("RMAP_AI_TIMEOUT_MS")
-            .unwrap_or_else(|| "60000".into())
+            .unwrap_or_else(|| DEFAULT_TIMEOUT_MS.to_string())
             .parse::<u64>()
             .map_err(|_| "RMAP_AI_TIMEOUT_MS must be a positive integer")?;
         if timeout_ms == 0 {

@@ -1,6 +1,6 @@
 # Architecture
 
-Version **0.5.5** combines bounded TCP SMB2 and NFSv3 identification, portmapper v2
+Version **0.5.6** combines bounded TCP SMB2 and NFSv3 identification, portmapper v2
 identification and DUMP enumeration, HTTP/HTTPS probing, and passive SSH, FTP,
 and SMTP recognition. The
 IPv4 SYN pipeline continues to perform port discovery without application
@@ -53,9 +53,11 @@ flowchart TD
     Evidence --> AIReport
 ```
 
-`main.rs` parses CLI arguments, validates optional AI settings once, then loops over the validated target list. For each target it creates progress, calls the common scan entry point, prints measured results, and optionally requests AI interpretation for that host. The collector invokes the callback on the caller thread as probes finish, while presentation remains in `src/model/progress.rs`. AI settings are borrowed across hosts; measured results and interpretations are not combined across hosts. AI configuration failures are reported early without preventing scanning. The scanner has no dependency on the AI service. AI configuration and failures cannot change measured port outcomes or prevent the initial report from being displayed.
+`main.rs` parses CLI arguments, validates optional AI settings once, then loops over the validated target list. For each target it creates progress, calls the common scan entry point, prints measured results, and optionally requests AI interpretation for that host. The collector invokes the callback on the caller thread as probes finish, while presentation remains in `src/report/progress.rs`. AI settings are borrowed across hosts; measured results and interpretations are not combined across hosts. AI configuration failures are reported early without preventing scanning. The scanner has no dependency on the AI service. AI configuration and failures cannot change measured port outcomes or prevent the initial report from being displayed.
 
 ## Module responsibilities
+
+See the [project layout](project-layout.md) for the complete tree and constants map.
 
 | Module | Responsibility |
 | --- | --- |
@@ -69,25 +71,29 @@ flowchart TD
 | `src/model/syn.rs` | Parsed packet, reply, and original-probe values |
 | `src/mapper/syn.rs` | Map SYN measurements into TCP results |
 | `src/scan/worker.rs` | Schedule bounded async tasks on a shared Tokio runtime, report completions, and restore input order |
-| `src/scan/tcp.rs` | TCP connection measurements, HTTP/HTTPS/portmapper/NFS/SMB dispatch, bounded passive reads, and result-preserving identification |
+| `src/scan/tcp/mod.rs` | TCP connection measurements; `service.rs` selects and applies identification, while `banner.rs` bounds passive reads |
 | `src/scan/identify.rs` | Parse supported SSH, HTTP, FTP and SMTP banners into service information |
 | `src/scan/http.rs` | HTTP/HTTPS candidate and request selection, bounded `HEAD` probes, and structured `Server` header extraction |
-| `src/scan/rpc.rs` | Bounded TCP portmapper NULL exchange, record encoding/assembly, reply validation, candidate selection, and validated-response mapping |
+| `src/scan/rpc/mod.rs` | Portmapper entry points, delegating request encoding, record assembly, reply validation and transport to child modules |
 | `src/scan/nfs.rs` | NFSv3 NULL request, bounded shared RPC exchange, candidate selection, and validated `nfs` identification |
-| `src/scan/smb.rs` | Bounded SMB2 negotiation on open TCP port 445, explicit byte encoding, framing, validation, and service information |
+| `src/scan/smb/mod.rs` | SMB2 entry points and client identity, with request encoding, validation and transport in child modules |
 | `src/scan/smb/constants.rs` | Fixed SMB2 field values, dialect codes, response flags, and framing limits |
-| `src/model/smb_2_header.rs`, `smb_2_request_body.rs`, `smb_2_request.rs` | Structured request data, separate from byte encoding and measured service information |
+| `src/model/smb/header.rs`, `body.rs`, `mod.rs` | Structured request data, separate from byte encoding and measured service information |
 | `src/scan/udp.rs` | One empty UDP probe, receive timeout, and outcome classification |
-| `src/model/mod.rs` | Shared measured results, transport and status enums, and separate AI data |
+| `src/model/mod.rs` | Shared measured results, transport and status enums; separate AI data lives in `model/ai.rs` |
 | `src/model/rpc.rs` | Advertised program/version/protocol/port mappings, distinct from measured connectivity |
-| `src/model/progress.rs` | Display selected port count, timeout and throttled completion progress on stderr |
-| `src/model/report.rs` | Format measured results, interpretation, research notes, and sources |
+| `src/report/progress.rs` | Display selected port count, timeout and throttled completion progress on stderr |
+| `src/report/measured.rs` | Format measured results, uncertainty notes and advertised RPC registrations |
+| `src/report/ai.rs` | Display separate interpretation, research notes and sources |
+| `src/settings.rs` | Shared scan defaults and bounds used by parsing and dispatch |
 | `src/mapper/service_information.rs` | Map parsed service fields into owned `ServiceInformation` values and apply them to scan results |
-| `src/utils/banner.rs` | Shared CRLF line iteration, bounded byte escaping, digit-prefix checks, and banner text decoding |
+| `src/utils/banner.rs` | Shared CRLF lines, byte escaping, version-token checks and banner decoding |
 | `src/ai/config.rs` | DeepSeek and search credentials, timeout, optional local advisory path, and `.env` loading |
 | `src/ai/retrieval.rs` | Optional exact product/version text matching against local advisories |
 | `src/ai/web.rs` | Bounded Brave Search HTTP requests exposed as a Rig tool and capture of returned evidence |
-| `src/ai/service.rs` | Research instructions, bounded scan context, model/tool orchestration, and error handling |
+| `src/ai/service.rs` | Model/tool orchestration and error handling |
+| `src/ai/prompt.rs`, `src/ai/prompts/research.txt` | Format bounded observations and supply research instructions |
+| `src/ai/constants.rs` | Session, context and web-evidence limits |
 
 Protocol parsers retain their format-specific rules. Shared byte operations live in utility functions, and model construction lives in mapper functions. SSH, HTTP, FTP, SMTP, and RPC reuse the same service mapper; TCP banner previews, UDP response previews and HTTP header previews reuse the same byte-escaping helper. AI context and local advisory matching reuse the same banner-text decoder. These modules use ordinary Rust functions and do not add dependencies.
 
@@ -107,11 +113,11 @@ Protocol parsers retain their format-specific rules. Shared byte operations live
 
 ## Target selection and CIDR expansion
 
-`parsing_target_list` accepts comma-separated IPv4 addresses and CIDR subnets. CIDR entries call `parsing_target_for_subnet` to validate the address and prefix, then `calculate_subnet_boundaries` to obtain network and broadcast boundaries. The validated prefix is always from 0 through 32 before the boundary helper is called. A standard-library `HashSet` tracks membership while the output vector preserves first-occurrence order. Duplicate targets are omitted before scanning, so they receive one scan/report and at most one optional AI session each. Empty and invalid entries still fail validation, including when they follow duplicate entries.
+`parse_targets` in `src/cli/targets.rs` accepts comma-separated IPv4 addresses and CIDR subnets. CIDR entries call `parse_subnet` to validate the address and prefix, then `subnet_bounds` to obtain network and broadcast boundaries. The validated prefix is always from 0 through 32 before the boundary helper is called. A standard-library `HashSet` tracks membership while the output vector preserves first-occurrence order. Duplicate targets are omitted before scanning, so they receive one scan/report and at most one optional AI session each. Empty and invalid entries still fail validation, including when they follow duplicate entries.
 
 The scanner entry point continues to handle one host at a time. For prefixes below 31, expansion excludes network and broadcast boundaries; `/31` and `/32` retain all endpoints. Counts use `u64` to avoid `/0` overflow, and each subnet is checked against `MAX_TARGETS` (4,096) before iteration. The same maximum is enforced across unique entries from the combined list; overlaps and duplicates do not consume extra slots. Expansion is completed and validated before the existing host loop starts. Concurrent host scheduling and host discovery are not implemented.
 
-CLI port selection and exclusions share `parsing_ports_function` in `src/cli/mod.rs`. It accepts comma-separated individual ports and inclusive ranges, validates nonzero `u16` endpoints and ascending bounds, then expands them to the configuration's port strings. Expansion preserves order and duplicates. `--exclude-ports` requires an earlier explicit `--ports` list and removes matching entries without changing the order of remaining ports. Exclusions cannot remove every selected port. Range parsing and exclusion behavior are tested without network calls.
+CLI port selection and exclusions share `parse_ports` in `src/cli/ports.rs`. It accepts comma-separated individual ports and inclusive ranges, validates nonzero `u16` endpoints and ascending bounds, then expands them to the configuration's port strings. Expansion preserves order and duplicates. `--exclude-ports` requires an earlier explicit `--ports` list and removes matching entries without changing the order of remaining ports. Exclusions cannot remove every selected port. Range parsing and exclusion behavior are tested without network calls.
 
 ## Concurrent scheduling
 
@@ -314,7 +320,7 @@ exploit execution remain outside the current implementation. See [usage](usage.m
 
 ## Tests
 
-Unit tests for private helpers live in `tests/cli/`, `tests/scan/`, `tests/model/`, and `tests/ai/`. The source modules include those files during test builds. Tests use fixtures for request construction, response parsing, status classification, banner matching, prompt context, formatting, and concurrent scheduling. Worker tests use fake probes to verify overlap, concurrency limits, completion notifications, and ordered results. No live scan, search request, or AI request is needed for these checks.
+Unit tests for private helpers live in `tests/cli/`, `tests/scan/`, `tests/report/`, and `tests/ai/`. The source modules include those files during test builds. Tests use fixtures for request construction, response parsing, status classification, banner matching, prompt context, formatting, and concurrent scheduling. Worker tests use fake probes to verify overlap, concurrency limits, completion notifications, and ordered results. No live scan, search request, or AI request is needed for these checks.
 
 Resource tests distinguish soft from hard descriptor limits, cover exhausted
 budgets without unsigned underflow, and simulate a full 65,535-port schedule with
