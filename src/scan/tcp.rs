@@ -1,4 +1,4 @@
-//! One TCP connection attempt with passive banners or HTTP, HTTPS, and RPC probes.
+//! TCP connection measurements with passive banners or HTTP, HTTPS, RPC, and NFS probes.
 
 use std::future::Future;
 use std::io::ErrorKind;
@@ -9,7 +9,7 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::net::TcpStream;
 use tokio::time::{Instant as Deadline, timeout_at};
 
-use super::{http, identify, rpc};
+use super::{http, identify, nfs, rpc};
 use crate::mapper::service_information::apply_service_information;
 use crate::model::rpc::RpcMapping;
 use crate::model::service_information::ServiceInformation;
@@ -48,6 +48,12 @@ pub(super) async fn scan_port(target: SocketAddr, timeout: Duration) -> ScanResu
                 .await;
                 collect_rpc_dump(&mut result, timeout, |_xid, _deadline, _limit| {
                     rpc::probe_dump(target, _xid, _deadline, _limit)
+                })
+                .await;
+            } else if nfs::is_nfs_candidate(target.port()) {
+                drop(stream);
+                collect_nfs(&mut result, timeout, |_xid, _deadline, _limit| {
+                    nfs::probe(target, _xid, _deadline, _limit)
                 })
                 .await;
             } else {
@@ -139,7 +145,25 @@ where
     apply_rpc_dump_result(_result, _response);
 }
 
-/// Share XID generation and per-exchange bounds between NULL and DUMP.
+/// Identify NFSv3 on an open TCP candidate without replacing connection measurements.
+async fn collect_nfs<F, Fut>(_result: &mut ScanResult, _timeout: Duration, _probe: F)
+where
+    F: FnOnce(u32, Deadline, usize) -> Fut,
+    Fut: Future<Output = Result<Vec<u8>, String>>,
+{
+    if _result.transport != ScanMode::Tcp
+        || _result.status != PortStatus::Open
+        || !nfs::is_nfs_candidate(_result.port)
+    {
+        return;
+    }
+    let _response = run_rpc_exchange(_timeout, _probe)
+        .await
+        .and_then(|(_xid, _reply)| nfs::response_information(&_reply, _xid));
+    apply_service_probe_result(_result, _response, "NFS");
+}
+
+/// Share XID generation and per-exchange bounds between portmapper and NFS.
 async fn run_rpc_exchange<F, Fut>(_timeout: Duration, _probe: F) -> Result<(u32, Vec<u8>), String>
 where
     F: FnOnce(u32, Deadline, usize) -> Fut,
@@ -165,15 +189,24 @@ fn apply_rpc_probe_result(
         return;
     }
 
-    let _detail =
-        match _response.and_then(|_reply| rpc::response_information(_reply, _expected_xid)) {
-            Ok(_information) => {
-                let _detail = _information.observation.clone();
-                apply_service_information(_result, _information);
-                _detail
-            }
-            Err(_error) => Some(format!("RPC probe failed: {_error}")),
-        };
+    let _response = _response.and_then(|_reply| rpc::response_information(_reply, _expected_xid));
+    apply_service_probe_result(_result, _response, "RPC");
+}
+
+/// Apply validated identification or append a diagnostic, retaining earlier evidence.
+fn apply_service_probe_result(
+    _result: &mut ScanResult,
+    _response: Result<ServiceInformation, String>,
+    _protocol: &str,
+) {
+    let _detail = match _response {
+        Ok(_information) => {
+            let _detail = _information.observation.clone();
+            apply_service_information(_result, _information);
+            _detail
+        }
+        Err(_error) => Some(format!("{_protocol} probe failed: {_error}")),
+    };
     if let Some(_detail) = _detail {
         append_observation(_result, &_detail);
     }

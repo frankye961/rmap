@@ -1,6 +1,6 @@
 use super::{
     apply_http_probe_result, apply_rpc_dump_result, apply_rpc_probe_result, banner_result,
-    collect_rpc, collect_rpc_dump, read_banner,
+    collect_nfs, collect_rpc, collect_rpc_dump, read_banner,
 };
 use crate::model::{PortStatus, ScanMode, ScanResult};
 use std::io;
@@ -116,6 +116,146 @@ fn http_probe_failure_preserves_the_open_port_without_inventing_a_service() {
 const RPC_REPLY: [u8; 24] = [
     0x12, 0x34, 0x56, 0x78, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 ];
+
+#[tokio::test]
+async fn nfs_collection_identifies_version_three_and_preserves_connection_evidence() {
+    let mut result = measured_open_tcp_port(2049);
+    result.observation = Some("earlier read stopped".into());
+    result.banner = Some(b"earlier bytes".to_vec());
+    let timeout = Duration::from_secs(1);
+    let before = tokio::time::Instant::now();
+    collect_nfs(&mut result, timeout, |xid, deadline, limit| {
+        assert!(deadline >= before + timeout);
+        assert!(deadline <= tokio::time::Instant::now() + timeout);
+        assert_eq!(limit, 4096);
+        async move {
+            let mut reply = RPC_REPLY.to_vec();
+            reply[..4].copy_from_slice(&xid.to_be_bytes());
+            Ok(reply)
+        }
+    })
+    .await;
+    assert_eq!(result.service.as_deref(), Some("nfs"));
+    let information = result.service_information.as_ref().unwrap();
+    assert_eq!(information.transport, ScanMode::Tcp);
+    assert!(information.product.is_none());
+    assert!(information.version.is_none());
+    assert!(
+        information
+            .observation
+            .as_deref()
+            .unwrap()
+            .contains("NFS protocol version 3")
+    );
+    assert_eq!(result.port, 2049);
+    assert_eq!(result.transport, ScanMode::Tcp);
+    assert_eq!(result.status, PortStatus::Open);
+    assert_eq!(result.elapsed, Duration::from_millis(17));
+    assert!(result.error.is_none());
+    assert!(result.rpc_mappings.is_none());
+    assert_eq!(result.banner.as_deref(), Some(b"earlier bytes".as_slice()));
+    assert!(
+        result
+            .observation
+            .as_deref()
+            .unwrap()
+            .starts_with("earlier read stopped; ")
+    );
+}
+
+#[tokio::test]
+async fn nfs_probe_failures_preserve_existing_identification_and_open_measurements() {
+    for failure in ["io", "truncated", "xid", "payload", "version_mismatch"] {
+        let mut result = measured_open_tcp_port(2049);
+        let previous = crate::mapper::service_information::map_tcp_service("rpc", None, None, None);
+        super::apply_service_information(&mut result, previous.clone());
+        result.observation = Some("earlier observation".into());
+        result.banner = Some(b"earlier bytes".to_vec());
+        collect_nfs(
+            &mut result,
+            Duration::from_secs(1),
+            |xid, _, _| async move {
+                if failure == "io" {
+                    return Err("fixture NFS timeout".into());
+                }
+                if failure == "truncated" {
+                    return Ok(Vec::new());
+                }
+                let mut reply = RPC_REPLY.to_vec();
+                let response_xid = if failure == "xid" {
+                    xid.wrapping_add(1)
+                } else {
+                    xid
+                };
+                reply[..4].copy_from_slice(&response_xid.to_be_bytes());
+                if failure == "payload" {
+                    reply.extend_from_slice(&[0; 4]);
+                }
+                if failure == "version_mismatch" {
+                    reply[23] = 2;
+                }
+                Ok(reply)
+            },
+        )
+        .await;
+        assert_eq!(result.status, PortStatus::Open);
+        assert_eq!(result.service.as_deref(), Some("rpc"));
+        assert_eq!(result.service_information, Some(previous));
+        assert_eq!(result.elapsed, Duration::from_millis(17));
+        assert!(result.error.is_none());
+        assert_eq!(result.banner.as_deref(), Some(b"earlier bytes".as_slice()));
+        assert!(
+            result
+                .observation
+                .as_deref()
+                .unwrap()
+                .starts_with("earlier observation; NFS probe failed: ")
+        );
+    }
+}
+
+#[tokio::test]
+async fn nfs_candidate_port_alone_does_not_establish_identity_on_probe_failure() {
+    let mut result = measured_open_tcp_port(2049);
+    collect_nfs(&mut result, Duration::from_secs(1), |_, _, _| async {
+        Err("fixture read timeout".into())
+    })
+    .await;
+    assert_eq!(result.status, PortStatus::Open);
+    assert!(result.service.is_none());
+    assert!(result.service_information.is_none());
+    assert_eq!(
+        result.observation.as_deref(),
+        Some("NFS probe failed: fixture read timeout")
+    );
+    assert!(result.error.is_none());
+}
+
+#[tokio::test]
+async fn nfs_collection_skips_other_ports_states_and_scan_modes() {
+    for (port, transport, status) in [
+        (111, ScanMode::Tcp, PortStatus::Open),
+        (80, ScanMode::Tcp, PortStatus::Open),
+        (2050, ScanMode::Tcp, PortStatus::Open),
+        (2049, ScanMode::Udp, PortStatus::Open),
+        (2049, ScanMode::Syn, PortStatus::Open),
+        (2049, ScanMode::Tcp, PortStatus::Closed),
+        (2049, ScanMode::Tcp, PortStatus::Filtered),
+        (2049, ScanMode::Tcp, PortStatus::Unknown),
+    ] {
+        let mut result = measured_open_tcp_port(port);
+        result.transport = transport;
+        result.status = status;
+        collect_nfs(&mut result, Duration::from_secs(1), |_, _, _| async {
+            panic!("NFS exchange must not run for this result")
+        })
+        .await;
+        assert_eq!(result.transport, transport);
+        assert_eq!(result.status, status);
+        assert!(result.service.is_none());
+        assert!(result.observation.is_none());
+    }
+}
 
 fn advertised_mapping() -> crate::model::rpc::RpcMapping {
     crate::model::rpc::RpcMapping {

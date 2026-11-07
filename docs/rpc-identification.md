@@ -7,7 +7,8 @@ offline fixtures; live protocol validation remains separate work.
 TCP connect scans identify a service that successfully answers a portmapper v2
 NULL call, then enumerate its advertised registrations with DUMP. Probes are
 selected automatically for confirmed-open TCP port 111; no additional CLI flag
-is needed. NFS identification and RPC over UDP remain outside this implementation.
+is needed. [NFSv3 identification](nfs-identification.md) uses a separate module
+and selected TCP port 2049; RPC over UDP remains future work.
 
 ## What is implemented
 
@@ -77,8 +78,11 @@ UDP, SYN, CLI syntax, and AI behavior are unchanged by RPC identification.
 
 Enumeration uses these shared helpers and models:
 
-- `build_portmapper_call` encodes the common header. NULL and DUMP wrappers use
-  procedure numbers 0 and 4 and return byte vectors directly.
+- `build_rpc_call` encodes the common header from XID, program, program version,
+  and procedure. CALL and RPC protocol version 2 are fixed. Portmapper wrappers
+  use program 100000, version 2, and procedure 0 or 4, returning byte vectors
+  directly. NFSv3 also uses this builder with program 100003 and version 3; its
+  probe runs on selected, confirmed-open TCP port 2049.
 - `validate_rpc_success_reply` checks the reply header, verifier, and procedure
   status, returning the cursor at the start of the result body. NULL validation
   still rejects trailing bytes; DUMP must parse its list from that cursor.
@@ -119,8 +123,9 @@ when checking a listening service and malformed/absent responses. Compare the
 request XID to the response, and verify that identification errors do not erase
 the measured open result. These are proposed checks, not experimental findings.
 
-Live DUMP enumeration remains unverified by the assistant. NFS identification,
-UDP RPC probes, retries, and probing arbitrary TCP ports are later extensions.
+Live DUMP enumeration remains unverified by the assistant. UDP RPC probes,
+retries, and probing arbitrary TCP ports are later extensions. The separate
+NFSv3 module also requires controlled-lab validation.
 
 ## Offline verification
 

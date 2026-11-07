@@ -43,7 +43,7 @@ pub(super) async fn probe_dump(
 }
 
 /// Connect once for either procedure, sharing the same deadline with stream I/O.
-async fn exchange_rpc_call(
+pub(super) async fn exchange_rpc_call(
     _target: SocketAddr,
     _message: &[u8],
     _deadline: Instant,
@@ -101,23 +101,33 @@ pub(super) fn append_u32(_buffer: &mut Vec<u8>, _value: u32) {
 
 /// Build a 40-byte portmapper v2 NULL call with AUTH_NONE and no TCP framing.
 pub(super) fn build_portmapper_null_call(_xid: u32) -> Vec<u8> {
-    build_portmapper_call(_xid, 0)
+    build_rpc_call(_xid, 100000, 2, 0)
 }
 
 /// Build a portmapper v2 DUMP call with AUTH_NONE, without a TCP record marker.
 fn build_portmapper_dump_call(_xid: u32) -> Vec<u8> {
-    build_portmapper_call(_xid, 4)
+    build_rpc_call(_xid, 100000, 2, 4)
 }
 
 /// Encode the common ten-field header for procedures with no arguments.
-fn build_portmapper_call(_xid: u32, _procedure: u32) -> Vec<u8> {
+pub(super) fn build_rpc_call(
+    _xid: u32,
+    _program: u32,
+    _program_version: u32,
+    _procedure: u32,
+) -> Vec<u8> {
     let mut _call = Vec::with_capacity(40);
     for _field in [
-        _xid, 0, // CALL.
+        _xid,
+        0, // CALL.
         2, // RPC protocol version.
-        100000, 2, // Portmapper program version.
-        _procedure, 0, 0, // Empty AUTH_NONE credentials.
-        0, 0, // Empty AUTH_NONE verifier.
+        _program,
+        _program_version,
+        _procedure,
+        0,
+        0, // Empty AUTH_NONE credentials.
+        0,
+        0, // Empty AUTH_NONE verifier.
     ] {
         append_u32(&mut _call, _field);
     }
@@ -320,7 +330,10 @@ fn skip_rpc_verifier(_data: &[u8], _offset: usize) -> Result<usize, String> {
 }
 
 /// Validate the common successful reply envelope and return its result-body offset.
-fn validate_rpc_success_reply(_data: &[u8], _expected_xid: u32) -> Result<usize, String> {
+pub(super) fn validate_rpc_success_reply(
+    _data: &[u8],
+    _expected_xid: u32,
+) -> Result<usize, String> {
     let mut _cursor = validate_rpc_reply_header(_data, _expected_xid)?;
     _cursor = skip_rpc_verifier(_data, _cursor)?;
     let accept_stat = read_u32(_data, &mut _cursor)

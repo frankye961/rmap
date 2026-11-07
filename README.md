@@ -1,6 +1,6 @@
 # rmap (ALPHA version)
 
-Current version: **0.5.3**.
+Current version: **0.5.4**.
 
 rmap is my research project in networking and cybersecurity. It began as a way
 to learn Rust and network programming and has grown into a network scanner
@@ -19,8 +19,13 @@ remediation. Those assessment features are planned; the current application
 provides the scanning and service-identification foundation. See
 [research goals and experiment guidance](docs/research.md).
 
-## Version 0.5.3: RPC identification and enumeration
+## Version 0.5.4: NFSv3 identification
 
+- Automatic NFSv3 NULL probing on confirmed-open TCP port 2049, with validated
+  `nfs` identification and an explicit protocol-version description. Failures
+  preserve the open state and existing evidence; software versions stay unknown.
+- Shared RPC request construction for portmapper and NFS, with offline byte-level
+  tests and a dedicated NFS learning guide.
 - Automatic TCP portmapper v2 NULL probing on confirmed-open port 111, with
   validated `rpcbind` identification and no guessed software version.
 - Automatic DUMP enumeration after successful identification, with at most
@@ -34,7 +39,7 @@ provides the scanning and service-identification foundation. See
   learning and research documentation. No dependencies were added.
 
 Offline tests cover parsing, framing, timeouts, result preservation, and the
-scanner integration. Live DUMP and TLS behavior still require controlled-lab
+scanner integration. Live NFS, DUMP, and TLS behavior still require controlled-lab
 validation; the tests do not establish real-world scan accuracy or performance.
 
 ## HTTPS identification
@@ -76,9 +81,9 @@ random XID; connecting, writing the complete frame, and reading all fragments
 share one identification deadline derived from `--timeout-ms`. The assembled
 reply is limited to 4096 bytes, checked before allocating each fragment.
 
-Other non-HTTP/HTTPS TCP ports retain passive banner collection. RPC probing adds
-no flag or dependency and does not run in UDP or SYN mode. NFS identification
-remains later work. This implementation has
+Other TCP ports retain passive banner collection except the NFSv3 candidate
+described below. RPC probing adds no flag or dependency and does not run in UDP
+or SYN mode. This implementation has
 offline tests; no live RPC validation has been performed by the assistant.
 See [RPC identification and learning notes](docs/rpc-identification.md).
 
@@ -94,10 +99,26 @@ explicitly. Registrations do not establish reachability, add measured open ports
 or expand the requested scan scope. Live DUMP interoperability has not been
 validated by the assistant; automated checks use fixtures and in-memory streams.
 
+## NFSv3 identification
+
+Confirmed-open TCP port 2049 now receives an NFSv3 NULL probe using RPC program
+100003, program version 3, and procedure 0. A validated successful reply labels
+the service `nfs` and records the protocol version in the detail. Software
+product and release version remain unknown.
+
+The probe reuses the RPC framing and bounded exchange, with one identification
+deadline and a 4096-byte reply limit. The initial connection closes before the
+probe connection opens. Identification errors preserve the measured open state
+and earlier evidence. Port 111 is not required, and RPC registrations do not
+trigger scans of additional ports. This first implementation supports TCP
+port 2049 and NFSv3; NFSv2/v4 and other ports remain later work. It does not mount
+exports or read files. Live NFS behavior has not been validated by the assistant.
+See [NFS identification and learning notes](docs/nfs-identification.md).
+
 The current application accepts individual IPv4 addresses, target lists, and CIDR
 subnets. It scans each unique host once using TCP connect, IPv4 TCP SYN, or UDP
-probes. TCP connect mode collects limited banners and selects HTTP, HTTPS, and
-RPC probes on supported candidate ports. Optional DeepSeek interpretation can
+probes. TCP connect mode collects limited banners and selects HTTP, HTTPS,
+portmapper, and NFSv3 probes on supported candidate ports. Optional DeepSeek interpretation can
 research public CVEs and exploit references using a web search tool. Host
 discovery, broader service fingerprinting, OS detection, and additional scan
 methods remain future work.
@@ -106,7 +127,7 @@ methods remain future work.
 
 1. The CLI validates every entry in the required IPv4 target list and any supplied options, then removes duplicate targets while retaining their first occurrence. Omitted options default to TCP, all ports from 1 through 65535, a timeout of 1000 ms, and up to 256 concurrent probes.
 2. Hosts are processed one at a time. For each host, the common scanner entry point schedules the selected mode through bounded Tokio tasks on a shared runtime. UDP sends empty datagrams, TCP connect attempts normal connections, and SYN mode sends raw TCP SYN packets. Each mode records its measured outcomes in `ScanResult` values.
-3. In TCP connect mode, confirmed-open HTTP candidate ports (80, 8000, 8080, 8888) and HTTPS candidates (443, 8443) get a separate `HEAD` probe using the corresponding scheme. Open TCP port 111 gets a bounded portmapper NULL probe; other open ports receive passive banner reads. A validated response supplies structured service information. SYN mode sends a raw TCP SYN and validates response checksums, reversed endpoints, flags, and acknowledgment. It does not collect application banners.
+3. In TCP connect mode, confirmed-open HTTP candidate ports (80, 8000, 8080, 8888) and HTTPS candidates (443, 8443) get a separate `HEAD` probe using the corresponding scheme. Open TCP port 111 gets portmapper NULL identification followed by DUMP on success; open TCP port 2049 gets an NFSv3 NULL probe. Other open ports receive passive banner reads. A validated response supplies structured service information. SYN mode sends a raw TCP SYN and validates response checksums, reversed endpoints, flags, and acknowledgment. It does not collect application banners.
 4. Progress is reported on stderr while ports are scanned. Each host’s measured table prints after its scan and before its optional AI research. Full-range scans and `--ports` lists containing ranges show only confirmed open ports; lists of individual ports show every selected outcome. AI configuration is validated before scanning; configuration errors disable the AI step without stopping the scan.
 5. With `--ai`, the program sends bounded observations for the current host to DeepSeek through Rig before moving to the next host. With a Brave Search key configured, the agent researches CVEs, vendor and distribution advisories, and Exploit-DB references using a public web search tool. An optional local advisory file can supplement the web evidence. Interpretation and retrieved source links appear separately from measurements. AI or search failures leave the scan report visible.
 
@@ -613,6 +634,7 @@ src/
 │   ├── identify.rs     SSH, HTTP, FTP, and SMTP banner identification
 │   ├── udp.rs          UDP probes and outcome classification
 │   ├── rpc.rs          Bounded portmapper exchange, record framing, and validation
+│   ├── nfs.rs          NFSv3 NULL requests, shared RPC exchange, and identification
 │   └── http.rs         HTTP/HTTPS candidates, HEAD probes, and header extraction
 ├── model/
 │   ├── mod.rs          Scan results, preserved banner bytes, and AI data

@@ -17,10 +17,18 @@ endpoints are not automatically probed or counted as measured open ports.
 UDP and SYN modes do not perform these probes.
 See [RPC learning notes](rpc-identification.md).
 
+Confirmed-open TCP port 2049 automatically receives an NFSv3 NULL probe, even
+when port 111 is not selected. A validated reply supplies `nfs` and the detail
+`RPC program 100003; NFS protocol version 3; NULL procedure succeeded`.
+The probe has its own `--timeout-ms` identification budget and a 4096-byte reply
+limit. Failures preserve the open state. This first NFS implementation supports
+NFSv3 over TCP port 2049; it does not probe UDP, SYN results, or additional ports
+listed in RPC registrations. See [NFS learning notes](nfs-identification.md).
+
 Example command for a lab host you are authorized to assess:
 
 ```bash
-rmap --tcp --target 192.0.2.10 --ports 111 --timeout-ms 1000
+rmap --tcp --target 192.0.2.10 --ports 111,2049 --timeout-ms 1000
 ```
 
 This command has not been run as part of offline validation; it is not an
@@ -43,7 +51,7 @@ rmap --help
 Cargo's installation directory, usually `~/.cargo/bin`, must be on `PATH`. Reinstall after source changes when invoking the installed `rmap`; building the project alone does not update that executable.
 
 After installation, `rmap --help` prints the startup banner with version
-`v0.5.3` without starting a scan. The same check can be made directly with
+`v0.5.4` without starting a scan. The same check can be made directly with
 `./target/release/rmap --help`.
 
 ## Select TCP connect, TCP SYN, or UDP

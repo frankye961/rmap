@@ -1,10 +1,14 @@
 # Architecture
 
-Version **0.5.3** connects bounded TCP portmapper v2 identification and DUMP
-enumeration to the scanner alongside HTTP/HTTPS probing and passive SSH, FTP,
+Version **0.5.4** combines bounded TCP NFSv3 identification, portmapper v2
+identification and DUMP enumeration, HTTP/HTTPS probing, and passive SSH, FTP,
 and SMTP recognition. The
 IPv4 SYN pipeline continues to perform port discovery without application
 identification.
+
+NFSv3 NULL identification runs on selected, confirmed-open
+TCP port 2049 through the same bounded RPC exchange. See the
+[NFS learning notes](nfs-identification.md).
 
 rmap is also the author's research project in networking and cybersecurity.
 The current architecture separates measurements, protocol identification, and
@@ -26,9 +30,11 @@ flowchart TD
     Pool --> SYN[syn module: raw SYN and validated reply loop]
     TCP --> HTTP[http.rs: HEAD probes on open HTTP and HTTPS candidate ports]
     TCP --> RPC[rpc.rs: bounded NULL probe on open TCP port 111]
+    TCP --> NFS[nfs.rs: NFSv3 NULL probe on open TCP port 2049]
     TCP --> Results[Structured ScanResult values]
     HTTP --> Results
     RPC --> Results
+    NFS --> Results
     UDP --> Results
     SYN --> Results
     Results --> Report[Measured console report]
@@ -61,10 +67,11 @@ flowchart TD
 | `src/model/syn.rs` | Parsed packet, reply, and original-probe values |
 | `src/mapper/syn.rs` | Map SYN measurements into TCP results |
 | `src/scan/worker.rs` | Schedule bounded async tasks on a shared Tokio runtime, report completions, and restore input order |
-| `src/scan/tcp.rs` | TCP connection measurements, HTTP/HTTPS/RPC dispatch, bounded passive reads, and result-preserving identification |
+| `src/scan/tcp.rs` | TCP connection measurements, HTTP/HTTPS/portmapper/NFS dispatch, bounded passive reads, and result-preserving identification |
 | `src/scan/identify.rs` | Parse supported SSH, HTTP, FTP and SMTP banners into service information |
 | `src/scan/http.rs` | HTTP/HTTPS candidate and request selection, bounded `HEAD` probes, and structured `Server` header extraction |
 | `src/scan/rpc.rs` | Bounded TCP portmapper NULL exchange, record encoding/assembly, reply validation, candidate selection, and validated-response mapping |
+| `src/scan/nfs.rs` | NFSv3 NULL request, bounded shared RPC exchange, candidate selection, and validated `nfs` identification |
 | `src/scan/udp.rs` | One empty UDP probe, receive timeout, and outcome classification |
 | `src/model/mod.rs` | Shared measured results, transport and status enums, and separate AI data |
 | `src/model/rpc.rs` | Advertised program/version/protocol/port mappings, distinct from measured connectivity |
@@ -184,13 +191,16 @@ before allocation. The deadline is also checked each iteration to bound empty
 fragments. TCP elapsed time still measures only the initial connection attempt;
 identification has its own timeout budget. UDP and SYN do not enter this path.
 Tests inject exchanges into `collect_rpc` and use in-memory streams for record
-reading; no test here validates a live RPC server. NFS identification and RPC on
-other ports remain outside the initial scope. See
+reading; no test here validates a live RPC server. Portmapper probing on other
+ports remains outside the initial scope. See
 [RPC learning notes](rpc-identification.md).
 
-The common `build_portmapper_call` encodes the argument-free request header for
-NULL and DUMP, varying only the procedure number. Both wrappers return byte
-vectors directly. `validate_rpc_success_reply` validates the common envelope
+The common `build_rpc_call` accepts XID, program, program version, and procedure
+to encode an argument-free RPC request. CALL and RPC protocol version 2 remain
+fixed. Portmapper NULL and DUMP wrappers supply program 100000 and version 2,
+varying only the procedure number. Both wrappers return byte vectors directly.
+The NFS module uses the builder for program 100003, version 3, procedure 0.
+`validate_rpc_success_reply` validates the common envelope
 and returns the result-body offset. NULL then requires no remaining payload;
 the DUMP parser reads its list from that offset.
 
@@ -213,6 +223,21 @@ the open-port summary. The list parser validates markers, entry limits, truncati
 and trailing bytes. Runtime enumeration only follows successful NULL
 identification on an open TCP port 111; no extra endpoint is probed based on a
 registration. UDP and SYN never call the enumeration helper.
+
+NFS follows a separate candidate path in `scan_port`. After a successful initial
+connection to selected TCP port 2049, the scanner closes that stream and calls
+`collect_nfs`. The existing `run_rpc_exchange` supplies the XID, deadline, and
+4096-byte reply bound. `nfs::probe` delegates framing and I/O to
+`rpc::exchange_rpc_call`; `nfs::response_information` validates the successful
+reply envelope and requires its result-body cursor to equal the reply length.
+
+`apply_service_probe_result` shares result application and diagnostic handling
+between portmapper NULL and NFS. It uses the existing service mapper, preserves
+connection evidence, and appends errors without clearing earlier identification.
+Success gives the `nfs` label and protocol version 3 in the observation; software
+product/version remain unknown. No filesystem operation or automatic probe of
+an advertised endpoint is performed. The current NFS path supports only TCP
+port 2049 and NFSv3, and its live behavior remains unverified.
 
 The SMTP parser first checks for an exact uppercase `SMTP` or `ESMTP` whitespace token, then requires a `220 ` or `220-` greeting prefix. It searches the remaining tokens for `Postfix` or `Exim`; the immediately following token is retained as a version only when it starts with an ASCII digit and contains ASCII alphanumeric characters, dots, hyphens, or underscores. Product and version are optional, so an unknown implementation still receives an `smtp` label. The same logic applies on nonstandard ports and is covered by in-memory fixtures.
 

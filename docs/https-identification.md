@@ -66,5 +66,7 @@ HTTPS service and a certificate valid for the scanned IP. Record expected and
 measured outcomes separately, including a comparison with a host whose
 certificate cannot be validated. Do not present expected outcomes as findings.
 
-RPC/NFS, SMB, and OS detection remain separate work. BreachMap assessment and
+Portmapper and NFSv3 probing are described in the [RPC](rpc-identification.md)
+and [NFS learning notes](nfs-identification.md). SMB and OS detection remain
+later work. BreachMap assessment and
 policy evaluation have been deferred while service identification is completed.

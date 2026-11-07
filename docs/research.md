@@ -12,12 +12,16 @@ an open port nor an AI-generated CVE candidate establishes exploitability.
 
 ## Current experimental foundation
 
-Version 0.5.3 provides TCP connect, UDP, and Linux IPv4 SYN scanning; bounded
+Version 0.5.4 provides TCP connect, UDP, and Linux IPv4 SYN scanning; bounded
 concurrent scheduling; passive banner recognition; HTTP/HTTPS probes; and TCP
 portmapper v2 NULL identification followed by DUMP enumeration. Advertised
 registrations remain separate from measured connectivity. Scan measurements and AI interpretation use
 separate models. Offline tests cover byte encoding, malformed responses,
 timeouts, scheduling, and preservation of open results when identification fails.
+
+It also includes [NFSv3 NULL identification](nfs-identification.md) on
+selected, confirmed-open TCP port 2049 using the shared RPC exchange. Its live
+behavior remains unverified by the assistant.
 
 These tests establish behavior for their fixtures. They do not measure accuracy
 against real networks, validate live TLS or RPC interoperability, or establish
@@ -74,5 +78,5 @@ rmap's existing application and scanning engine:
 
 These are planned capabilities. The current release does not implement policy
 input, run-context records, record export/import, cross-position comparison, or
-remediation comparison. Service enumeration, NFS/SMB identification, OS detection,
+remediation comparison. Broader NFS support, SMB identification, OS detection,
 and additional scan techniques are also separate future development choices.

@@ -1,9 +1,9 @@
 use super::{
-    append_u32, build_portmapper_dump_call, build_portmapper_null_call, decode_record_marker,
-    exchange_rpc_stream, frame_rpc_record, is_rpc_candidate, parse_portmapper_dump_reply, probe,
-    probe_dump, read_rpc_mapping, read_rpc_record, read_u32, record_marker, response_information,
-    skip_rpc_verifier, validate_portmapper_null_reply, validate_rpc_reply_header,
-    validate_rpc_success_reply,
+    append_u32, build_portmapper_dump_call, build_portmapper_null_call, build_rpc_call,
+    decode_record_marker, exchange_rpc_stream, frame_rpc_record, is_rpc_candidate,
+    parse_portmapper_dump_reply, probe, probe_dump, read_rpc_mapping, read_rpc_record, read_u32,
+    record_marker, response_information, skip_rpc_verifier, validate_portmapper_null_reply,
+    validate_rpc_reply_header, validate_rpc_success_reply,
 };
 
 use std::pin::Pin;
@@ -909,6 +909,23 @@ const PORTMAPPER_DUMP_CALL: [u8; 40] = [
     0, 0, 0, 0, // Verifier flavor: AUTH_NONE.
     0, 0, 0, 0, // Verifier body length.
 ];
+
+#[test]
+fn generalized_builder_encodes_nfs_program_version_three_using_rpc_version_two() {
+    let expected: [u8; 40] = [
+        0x12, 0x34, 0x56, 0x78, // XID.
+        0, 0, 0, 0, // CALL.
+        0, 0, 0, 2, // RPC protocol version stays 2.
+        0, 1, 0x86, 0xa3, // Program 100003.
+        0, 0, 0, 3, // NFS program version 3.
+        0, 0, 0, 0, // NULL procedure.
+        0, 0, 0, 0, // Credential flavor: AUTH_NONE.
+        0, 0, 0, 0, // Credential body length.
+        0, 0, 0, 0, // Verifier flavor: AUTH_NONE.
+        0, 0, 0, 0, // Verifier body length.
+    ];
+    assert_eq!(build_rpc_call(0x12345678, 100003, 3, 0), expected);
+}
 
 #[test]
 fn builds_the_complete_dump_request_using_portmapper_version_two() {
