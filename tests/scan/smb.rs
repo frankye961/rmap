@@ -1,9 +1,9 @@
-use super::{
+use super::request::{
     build_smb_negotiate_request, build_smb2_negotiate_request_body,
     build_smb2_negotiate_request_header, encode_smb2_header, encode_smb2_request,
-    exchange_smb_stream, frame_smb_message, is_smb_candidate, probe, read_smb_message,
-    response_information,
 };
+use super::transport::{exchange_smb_stream, frame_smb_message, read_smb_message};
+use super::{is_smb_candidate, probe, response_information};
 use crate::model::ScanMode;
 use std::io;
 use std::pin::Pin;

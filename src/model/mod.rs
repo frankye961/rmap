@@ -1,20 +1,14 @@
 //! Structured scan measurements and separate AI analysis data.
 
-pub mod progress;
-pub mod report;
+mod ai;
 pub mod rpc;
 pub mod service_information;
-pub mod smb_2_header;
-pub mod smb_2_request;
-pub mod smb_2_request_body;
+pub mod smb;
 pub mod syn;
 
 use self::rpc::RpcMapping;
 use self::service_information::ServiceInformation;
 use std::time::Duration;
-
-pub const DEFAULT_CONCURRENCY: usize = 256;
-pub const MAX_CONCURRENCY: usize = 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ScanMode {
@@ -57,6 +51,24 @@ pub struct ScanResult {
     pub rpc_mappings: Option<Vec<RpcMapping>>,
 }
 
+impl ScanResult {
+    /// Start with measured connection fields and no inferred service or response evidence.
+    pub fn new(port: u16, transport: ScanMode, status: PortStatus, elapsed: Duration) -> Self {
+        Self {
+            port,
+            transport,
+            status,
+            elapsed,
+            service: None,
+            error: None,
+            observation: None,
+            banner: None,
+            service_information: None,
+            rpc_mappings: None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PortStatus {
     Open,
@@ -68,29 +80,4 @@ pub enum PortStatus {
     Unknown,
 }
 
-/// Interpretation returned by the optional AI step, kept apart from scan measurements.
-pub struct AiAnalysis {
-    pub interpretation: String,
-    pub candidates: Vec<CveCandidate>,
-    pub web_sources: Vec<WebSource>,
-    pub research_notes: Vec<String>,
-}
-
-/// A public search result actually returned during AI research, not an AI-invented link.
-#[derive(Clone, Debug, serde::Serialize)]
-pub struct WebSource {
-    pub title: String,
-    pub url: String,
-    pub snippet: String,
-}
-
-/// Advisory matched to a measured service and version in the local corpus.
-pub struct CveCandidate {
-    pub id: String,
-    pub port: u16,
-    pub transport: ScanMode,
-    pub product: String,
-    pub version: String,
-    pub description: String,
-    pub source: String,
-}
+pub use ai::{AiAnalysis, CveCandidate, WebSource};

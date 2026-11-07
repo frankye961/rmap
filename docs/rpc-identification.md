@@ -12,7 +12,7 @@ and selected TCP port 2049; RPC over UDP remains future work.
 
 ## What is implemented
 
-- `src/scan/rpc.rs` builds the 40-byte call for program 100000, version 2,
+- `src/scan/rpc/request.rs` builds the 40-byte call for program 100000, version 2,
   procedure NULL, using AUTH_NONE. `frame_rpc_record` adds one final-fragment
   TCP record marker.
 - `decode_record_marker` extracts each fragment's final flag and length.
@@ -138,7 +138,7 @@ opening a connection. `tests/scan/tcp.rs` injects exchanges into the same
 collection helper used by the scanner, checking XID propagation, deadline and
 limit selection, service mapping, failure preservation, and rejection of
 non-candidates or other scan modes.
-`tests/model/report.rs` checks the console representation of mapped information.
+`tests/report/measured.rs` checks the console representation of mapped information.
 These are expected fixture outcomes, not measured live RPC findings.
 
 Shared stream tests send both NULL and DUMP request fixtures through in-memory
@@ -169,3 +169,6 @@ cargo clippy --offline --locked --all-targets -- -D warnings
   length-prefixed opaque data and XDR padding.
 - [Tokio I/O tutorial](https://tokio.rs/tokio/tutorial/io): asynchronous reading
   and writing, including why a stream read may return fewer bytes than requested.
+
+Request encoding, record framing, reply validation, and transport now have separate
+files under `src/scan/rpc/`; [project layout](project-layout.md) maps each responsibility.

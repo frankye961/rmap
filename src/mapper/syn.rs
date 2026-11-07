@@ -6,7 +6,7 @@ use std::time::Duration;
 use crate::model::{PortStatus, ScanMode, ScanResult};
 
 /// Build a TCP result from measured state, elapsed time, and separate diagnostic data.
-/// Raw packet bytes are not application banners. Console presentation belongs to model/report.rs.
+/// Raw packet bytes are not application banners. Console presentation belongs to report/measured.rs.
 pub fn map_syn_result(
     _target: SocketAddr,
     _status: PortStatus,
@@ -14,16 +14,8 @@ pub fn map_syn_result(
     _error: Option<String>,
     _observation: Option<String>,
 ) -> ScanResult {
-    ScanResult {
-        port: _target.port(),
-        transport: ScanMode::Tcp,
-        status: _status,
-        service: None,
-        elapsed: _elapsed,
-        error: _error,
-        observation: _observation,
-        banner: None,
-        service_information: None,
-        rpc_mappings: None,
-    }
+    let mut result = ScanResult::new(_target.port(), ScanMode::Tcp, _status, _elapsed);
+    result.error = _error;
+    result.observation = _observation;
+    result
 }

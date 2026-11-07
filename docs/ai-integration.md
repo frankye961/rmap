@@ -2,7 +2,7 @@
 
 `--ai` requests a separate DeepSeek interpretation after measured results are printed. The scanner does not call AI. The AI service uses Rig to give DeepSeek the observations and a `search_web` tool. Source links actually returned by the tool are collected independently of generated prose. Model, search, and optional local lookup failures never discard measured results.
 
-For build/install instructions, commands, and troubleshooting, see [usage](usage.md). The [README example](../README.md#example-tcp-scan-with-ai-research) contains a complete recorded TCP run, including source links; expand its console-output section to view it.
+For build/install instructions, commands, and troubleshooting, see [usage](usage.md). The [recorded example](examples.md) contains a complete recorded TCP run, including source links; expand its console-output section to view it.
 
 ## Configuration
 
@@ -39,3 +39,33 @@ The measured table is independent of the generated answer. `SERVICE` is a limite
 The generated sections describe observed services, possible CVEs, public exploit references and verification. The application then prints `WEB RESEARCH` notes and source URLs actually returned by the tool. The tool may retrieve irrelevant or contradictory hits: those are evidence for comparison, not automatically accepted findings. An exploit entry for a different product or version must not be treated as proof that the observed service is exploitable.
 
 Check the research notes if the model says browsing was unavailable. The model's words can be mistaken; missing credentials, no tool invocation, HTTP errors, and empty results are recorded independently. A six-search count describes the bounded research session rather than complete internet coverage. Only the first eight observations reach the prompt, with open ports first, so some measured rows may be omitted from the interpretation.
+
+## Configuration reference
+
+Copy [`.env.example`](../.env.example) to a local `.env` in the directory where you run `rmap`, or export the same names in your shell. The application reads `.env` only when `--ai` is used. Exported environment variables take precedence over values in the file. `.env` and other local `.env.*` files are Git-ignored; `.env.example` is tracked.
+
+| Variable | Meaning |
+| --- | --- |
+| `RMAP_AI_BASE_URL` | Optional DeepSeek API base URL; blank uses Rig's default endpoint |
+| `RMAP_AI_API_KEY` | Required DeepSeek API key |
+| `RMAP_AI_MODEL` | Required model identifier chosen by the user |
+| `RMAP_AI_TIMEOUT_MS` | Maximum duration of the complete AI research session in milliseconds; defaults to `60000` |
+| `RMAP_SEARCH_API_KEY` | Brave Search API key for live CVE, advisory, and Exploit-DB searches |
+| `RMAP_CVE_FILE` | Optional path to your local advisory TSV file |
+
+Existing `RUST_NMAP_*` variables remain accepted as compatibility aliases. Nonempty exported values take precedence over file values; within each source, `RMAP_*` takes precedence over its legacy alias. Your existing local `.env` can keep its previous variable names.
+
+The AI request uses DeepSeek's non-thinking mode to produce a short final answer. The application does not print the API key or provider response body. Configuration or model errors are reported after the measured results; search and optional local lookup errors appear as research notes. Keep credentials out of commits, logs, reports, and shared terminal output.
+
+
+## Implementation locations
+
+- `src/ai/config.rs`: settings and local environment-file parsing.
+- `src/ai/constants.rs`: session, context, and web-search bounds.
+- `src/ai/prompt.rs`: measured observation and advisory formatting.
+- `src/ai/prompts/research.txt`: provider-independent research instructions, with
+  search-budget and answer-line placeholders filled from constants.
+- `src/ai/service.rs`: Rig/DeepSeek orchestration and sanitized errors.
+- `src/ai/web.rs`: search requests, response validation, and evidence retention.
+- `src/ai/retrieval.rs`: optional local advisory parsing and exact-version matching.
+- `src/model/ai.rs` and `src/report/ai.rs`: separate data and console presentation.

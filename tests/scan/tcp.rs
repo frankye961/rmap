@@ -1,6 +1,7 @@
-use super::{
-    apply_http_probe_result, apply_rpc_dump_result, apply_rpc_probe_result, banner_result,
-    collect_nfs, collect_rpc, collect_rpc_dump, collect_smb, read_banner,
+use super::banner::{banner_result, read_banner};
+use super::service::{
+    apply_http_probe_result, apply_rpc_dump_result, apply_rpc_probe_result, collect_nfs,
+    collect_rpc, collect_rpc_dump, collect_smb,
 };
 use crate::model::{PortStatus, ScanMode, ScanResult};
 use std::io;
@@ -38,10 +39,10 @@ fn http_identification_reaches_scan_results_without_changing_measurements() {
             (None, None, None, None),
         ] {
             let mut result = measured_open_tcp_port(port);
-            let information = super::identify::identify_http_server(server);
+            let information = crate::scan::identify::identify_http_server(server);
             let detail = server.map(|server| format!("Server: {server}"));
             apply_http_probe_result(&mut result, Ok((information, detail.clone())));
-            super::identify::collect_banner(&mut result);
+            crate::scan::identify::collect_banner(&mut result);
 
             assert_eq!(result.service.as_deref(), Some("http"));
             let information = result.service_information.as_ref().unwrap();
@@ -66,10 +67,10 @@ fn https_probe_information_reaches_results_without_changing_measured_state() {
     for port in [443, 8443] {
         for server in [None, Some(&header)] {
             let mut result = measured_open_tcp_port(port);
-            let (information, detail) = super::http::response_information(server, true);
+            let (information, detail) = crate::scan::http::response_information(server, true);
             let expected_information = information.clone();
             apply_http_probe_result(&mut result, Ok((information, detail.clone())));
-            super::identify::collect_banner(&mut result);
+            crate::scan::identify::collect_banner(&mut result);
 
             assert_eq!(result.service.as_deref(), Some("https"));
             assert_eq!(
@@ -168,7 +169,10 @@ async fn nfs_probe_failures_preserve_existing_identification_and_open_measuremen
     for failure in ["io", "truncated", "xid", "payload", "version_mismatch"] {
         let mut result = measured_open_tcp_port(2049);
         let previous = crate::mapper::service_information::map_tcp_service("rpc", None, None, None);
-        super::apply_service_information(&mut result, previous.clone());
+        crate::mapper::service_information::apply_service_information(
+            &mut result,
+            previous.clone(),
+        );
         result.observation = Some("earlier observation".into());
         result.banner = Some(b"earlier bytes".to_vec());
         collect_nfs(
@@ -278,14 +282,14 @@ async fn smb_collection_uses_bounded_negotiation_and_preserves_connection_eviden
         let before = tokio::time::Instant::now();
         collect_smb(&mut result, timeout, |message_id, guid, deadline, limit| {
             assert_eq!(message_id, 0);
-            assert_eq!(guid, super::smb::client_guid().unwrap());
+            assert_eq!(guid, crate::scan::smb::client_guid().unwrap());
             assert!(deadline >= before + timeout);
             assert!(deadline <= tokio::time::Instant::now() + timeout);
             assert_eq!(limit, 4096);
             async move { Ok(smb_reply_fixture(message_id, dialect)) }
         })
         .await;
-        super::identify::collect_banner(&mut result);
+        crate::scan::identify::collect_banner(&mut result);
         assert_eq!(result.service.as_deref(), Some("smb"));
         let information = result.service_information.as_ref().unwrap();
         assert_eq!(information.transport, ScanMode::Tcp);
@@ -328,7 +332,10 @@ async fn smb_failures_keep_open_measurements_and_previous_identification() {
         let mut result = measured_open_tcp_port(445);
         let previous =
             crate::mapper::service_information::map_tcp_service("prior", None, None, None);
-        super::apply_service_information(&mut result, previous.clone());
+        crate::mapper::service_information::apply_service_information(
+            &mut result,
+            previous.clone(),
+        );
         result.observation = Some("earlier observation".into());
         result.banner = Some(b"earlier bytes".to_vec());
         result.rpc_mappings = Some(vec![advertised_mapping()]);
@@ -798,8 +805,11 @@ fn rpc_probe_failure_preserves_open_state_and_existing_identification() {
         Ok(&unsuccessful[..]),
     ] {
         let mut result = measured_open_tcp_port(111);
-        let existing = super::identify::identify_http_server(Some("Caddy"));
-        super::apply_service_information(&mut result, existing.clone());
+        let existing = crate::scan::identify::identify_http_server(Some("Caddy"));
+        crate::mapper::service_information::apply_service_information(
+            &mut result,
+            existing.clone(),
+        );
         result.observation = Some("passive read finished".into());
         result.banner = Some(b"original bytes".to_vec());
         apply_rpc_probe_result(&mut result, response, 0x12345678);

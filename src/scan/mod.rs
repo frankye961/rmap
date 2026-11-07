@@ -3,7 +3,8 @@
 use std::net::{Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
-use crate::model::{MAX_CONCURRENCY, ScanMode, ScanResult};
+use crate::model::{ScanMode, ScanResult};
+use crate::settings::MAX_CONCURRENCY;
 
 mod http;
 mod identify;

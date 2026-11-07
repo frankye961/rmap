@@ -34,7 +34,7 @@ fn displays_smb_dialect_as_protocol_evidence_without_a_software_version() {
 
 #[test]
 fn displays_mapped_rpc_information_without_a_fabricated_software_version() {
-    let information = crate::mapper::service_information::map_portmapper_service();
+    let information = crate::mapper::service_information::map_portmapper_service(100000, 2);
     let mut result = ScanResult {
         port: 111,
         transport: ScanMode::Tcp,

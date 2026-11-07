@@ -33,3 +33,8 @@ pub(super) const RESERVED_CLIENT_START_TIME: u64 = 0;
 pub(super) const RESERVED_U16: u16 = 0;
 pub(super) const RESERVED_U32: u32 = 0;
 pub(super) const MAX_DIRECT_TCP_PAYLOAD: usize = 0x00FF_FFFF;
+
+/// First request on a fresh SMB connection.
+pub(in crate::scan) const INITIAL_MESSAGE_ID: u64 = 0;
+/// Identification bound, independent of the 24-bit Direct TCP wire limit.
+pub(in crate::scan) const MAX_REPLY_BYTES: usize = 4096;
