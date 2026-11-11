@@ -17,6 +17,8 @@ uncertainty and model interpretation remain distinct.
 - [Architecture](architecture.md): control flow, models and evidence boundaries.
 - [Project layout](project-layout.md): module map, constants and offline tests.
 - [Research direction](research.md): reproducibility and later assessment work.
+- [SYN versus ACK experiment](experiments/syn-vs-ack.md): question, hypothesis,
+  controlled conditions and a results log awaiting measurements.
 - [Original learning checklist](milestone-1.md): historical introductory tasks.
 
 ## Protocol learning guides

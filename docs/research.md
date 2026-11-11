@@ -32,7 +32,14 @@ against real networks, validate live SMB, TLS, or RPC interoperability, or estab
 performance under high concurrency. The current output is a console report;
 durable assessment records and comparison tooling are future work.
 
-## Next controlled experiment
+## Current research experiment
+
+The [SYN versus ACK experiment plan](experiments/syn-vs-ack.md) asks what additional
+evidence ACK probing provides when SYN receives no response under controlled
+filtering. It defines a hypothesis, controls, expected outcomes and a results
+template. ACK remains scaffolding; the plan contains no measured findings.
+
+## Service-identification experiment
 
 Research question: can rmap distinguish an open TCP port from a successfully
 identified SMB service when identification fails?
@@ -51,7 +58,7 @@ expected conditions and outcomes, not measured findings:
 Retain the initial connection observation and inspect a packet capture to check
 that the reply message ID matches the request and framing lengths agree with the
 captured payload. Record identification failures separately
-from port state. The initial connection and the later RPC probe use different
+from port state. The initial connection and the later SMB probe use different
 connections, so a service or path can change between them.
 
 ## Reproducibility checklist

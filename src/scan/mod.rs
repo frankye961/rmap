@@ -9,10 +9,12 @@ use crate::settings::MAX_CONCURRENCY;
 mod http;
 mod identify;
 mod nfs;
+mod raw_tcp;
 mod resources;
 mod rpc;
 mod smb;
 mod syn;
+#[path = "tcp/mod.rs"]
 mod tcp;
 mod udp;
 mod worker;
