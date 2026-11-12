@@ -1,7 +1,7 @@
-//! ACK scan learning scaffold. Packet construction, I/O and classification remain unwritten.
+//! ACK header construction and scaffolding for probe I/O and reply classification.
 //!
 //! This module is not registered with the application or exposed through a CLI flag yet.
-//! Implement packet construction first, then setup, reply matching and orchestration.
+//! Header construction is implemented; next complete setup, reply matching and orchestration.
 //! The report will also need an `Unfiltered` outcome before ACK scanning is wired.
 
 use std::net::SocketAddr;
