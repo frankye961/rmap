@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use tokio::time::Instant as Deadline;
 
-use super::probe::AckProbe;
+use super::AckProbe;
 use crate::model::syn::{ParsedIpv4Packet, TcpReply};
 use crate::model::{PortStatus, ScanResult};
 

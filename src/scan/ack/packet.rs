@@ -1,5 +1,5 @@
+use super::AckProbe;
 use super::constants::{DATA_OFFSET_NO_OPTIONS, FLAG_ACK, TCP_HEADER_BYTES};
-use super::probe::AckProbe;
 use crate::scan::raw_tcp::checksum::apply_tcp_checksum;
 use crate::scan::raw_tcp::packet::{empty_tcp_header, write_ports};
 
