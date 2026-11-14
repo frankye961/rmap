@@ -6,6 +6,7 @@ use std::time::Instant;
 use tokio::time::Instant as Deadline;
 
 use super::AckProbe;
+use super::constants::FLAG_RST;
 use crate::model::syn::{ParsedIpv4Packet, TcpReply};
 use crate::model::{PortStatus, ScanResult};
 
@@ -25,7 +26,40 @@ pub(super) fn match_ack_reply(
     _packet: &ParsedIpv4Packet<'_>,
     _reply: &TcpReply,
 ) -> Result<bool, String> {
-    Err("ACK reply matching is not implemented".into())
+    let _probe_dest_port = _probe.destination.port();
+    let _probe_source_port = _probe.source.port();
+    let _probe_dest_addr = _probe.destination.ip();
+    let _probe_source_addr = _probe.source.ip();
+    let _packet_source_addr = _packet.source;
+    let _packet_destination_addr = _packet.destination;
+    let _reply_source_port = _reply.source_port;
+    let _reply_destination_port = _reply.destination_port;
+
+    if _packet_source_addr != *_probe_dest_addr {
+        return Ok(false);
+    }
+
+    if _packet_destination_addr != *_probe_source_addr {
+        return Ok(false);
+    }
+
+    if _reply_source_port != _probe_dest_port {
+        return Ok(false);
+    }
+
+    if _reply_destination_port != _probe_source_port {
+        return Ok(false);
+    }
+
+    if _reply.flags & FLAG_RST == 0 {
+        return Ok(false);
+    }
+
+    if _reply.sequence_number != _probe.acknowledgment_number {
+        return Ok(false);
+    }
+
+    Ok(true)
 }
 
 /// Classify a validated matching reset as Unfiltered once that model state exists.
@@ -64,3 +98,7 @@ where
 {
     Err("ACK result handling is not implemented".into())
 }
+
+#[cfg(test)]
+#[path = "../../../tests/scan/ack_reply.rs"]
+mod tests;
