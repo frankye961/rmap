@@ -39,10 +39,10 @@ fn limit_from_budget(
     limit: usize,
     open: usize,
 ) -> Result<usize, String> {
-    // SYN holds a reserved TCP socket plus a raw socket. TCP drops the initial
+    // SYN and ACK hold a reserved TCP socket plus a raw socket. TCP drops the initial
     // stream before its HTTP request, so TCP and UDP need one socket per probe.
     let per_probe = match mode {
-        ScanMode::Syn => 2,
+        ScanMode::Syn | ScanMode::Ack => 2,
         ScanMode::Tcp | ScanMode::Udp => 1,
     };
     let available = limit

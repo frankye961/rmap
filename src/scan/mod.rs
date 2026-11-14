@@ -1,4 +1,4 @@
-//! Validate targets and dispatch bounded concurrent TCP connect, SYN, or UDP probes.
+//! Validate targets and dispatch bounded concurrent TCP connect, SYN, ACK, or UDP probes.
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::time::Duration;
@@ -6,6 +6,7 @@ use std::time::Duration;
 use crate::model::{ScanMode, ScanResult};
 use crate::settings::MAX_CONCURRENCY;
 
+mod ack;
 mod http;
 mod identify;
 mod nfs;
@@ -36,8 +37,10 @@ pub fn scan(
         ));
     }
     let targets = targets(&address, ports)?;
-    if mode == ScanMode::Syn {
-        syn::check_available()?;
+    match mode {
+        ScanMode::Syn => syn::check_available()?,
+        ScanMode::Ack => ack::check_available()?,
+        ScanMode::Tcp | ScanMode::Udp => {}
     }
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -59,6 +62,7 @@ pub fn scan(
                 ScanMode::Tcp => tcp::scan_port(target, timeout).await,
                 ScanMode::Udp => udp::scan_port(target, timeout).await,
                 ScanMode::Syn => syn::scan_port(target, timeout).await,
+                ScanMode::Ack => ack::scan_port(target, timeout).await,
             }
         },
         on_result,

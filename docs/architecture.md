@@ -1,10 +1,11 @@
 # Architecture
 
-Version **0.5.6** combines bounded TCP SMB2 and NFSv3 identification, portmapper v2
+Version **0.6.0** combines bounded TCP SMB2 and NFSv3 identification, portmapper v2
 identification and DUMP enumeration, HTTP/HTTPS probing, and passive SSH, FTP,
 and SMTP recognition. The
 IPv4 SYN pipeline continues to perform port discovery without application
-identification.
+identification. A separate ACK pipeline now reports validated reset reachability
+as `unfiltered`, without inferring a listening service.
 
 NFSv3 NULL identification runs on selected, confirmed-open
 TCP port 2049 through the same bounded RPC exchange. See the
@@ -16,7 +17,7 @@ optional AI interpretation. Planned assessment context, connectivity-policy
 evaluation, and cross-run comparison will build on these boundaries; they are
 not implemented in this release. See [research direction](research.md).
 
-rmap is a Rust network scanner inspired by Nmap, with optional AI research into observed services, possible CVEs, and public exploit references. It scans selected ports concurrently through bounded Tokio tasks for each unique IPv4 target using TCP connect, raw TCP SYN, or empty UDP probes. Hosts are processed sequentially.
+rmap is a Rust network scanner inspired by Nmap, with optional AI research into observed services, possible CVEs, and public exploit references. It scans selected ports concurrently through bounded Tokio tasks for each unique IPv4 target using TCP connect, raw TCP SYN/ACK probes, or empty UDP probes. Hosts are processed sequentially.
 
 ## Flow through the application
 
@@ -28,6 +29,7 @@ flowchart TD
     Pool --> TCP[tcp.rs: TCP connect and banner reads]
     Pool --> UDP[udp.rs: empty UDP probes]
     Pool --> SYN[syn module: raw SYN and validated reply loop]
+    Pool --> ACK[ack module: raw ACK and validated reset correlation]
     TCP --> HTTP[http.rs: HEAD probes on open HTTP and HTTPS candidate ports]
     TCP --> RPC[rpc.rs: bounded NULL probe on open TCP port 111]
     TCP --> NFS[nfs.rs: NFSv3 NULL probe on open TCP port 2049]
@@ -39,6 +41,7 @@ flowchart TD
     SMB --> Results
     UDP --> Results
     SYN --> Results
+    ACK --> Results
     Results --> Report[Measured console report]
     Results --> AI[Optional AI service with --ai]
     Local[Optional local advisory file] --> AI
@@ -63,7 +66,7 @@ See the [project layout](project-layout.md) for the complete tree and constants 
 | --- | --- |
 | `src/cli/mod.rs` | Validate input; default to TCP, ports 1–65535, 1000 ms, and 256 concurrent probes; reject conflicting transport flags |
 | `src/cli/config.rs` | Validated `CliConfig` settings, including concurrency and open-only reporting selection |
-| `src/scan/mod.rs` | Dispatch TCP connect, SYN, or UDP through one entry point |
+| `src/scan/mod.rs` | Dispatch TCP connect, SYN, ACK, or UDP through one entry point |
 | `src/scan/syn/mod.rs` | Prepare and own probe resources; send and orchestrate response handling |
 | `src/scan/syn/packet.rs` | Pure byte construction, IPv4/TCP parsing, and checksums |
 | `src/scan/syn/reply.rs` | Match, classify, handle deadlines, and preserve results on cleanup failure |
@@ -280,6 +283,34 @@ AI is disabled unless explicitly requested. DeepSeek receives at most eight meas
 
 The tool captures actual returned source links separately from the model's answer. Snippets and banners are untrusted data. The prompt requires applicability checks and citations, but model conclusions remain interpretations. A source link does not prove the model has interpreted it correctly or that a target is vulnerable.
 
+## ACK response processing
+
+`--ack` works alone or with `--tcp`; it cannot be combined with `--syn` or `--udp`.
+`ScanMode::Ack` identifies the method, while `ScanResult.transport` remains TCP.
+The scanner checks raw-socket availability before scheduling and budgets two
+descriptors per probe, like SYN. The ACK entry point retains a TCP source-port
+reservation and a registered raw socket for the whole exchange.
+
+The header carries independent random sequence and acknowledgment values. Sending
+and receiving share one deadline after setup. Shared `raw_tcp` helpers handle
+socket readiness, byte encoding, checksum validation and parsing. ACK matching
+requires reversed addresses and ports, RST, and a response sequence equal to the
+sent acknowledgment value. It does not use SYN's sequence-plus-one rule or require
+an ACK-bearing reset. Invalid/unrelated packets do not extend the deadline, and
+the receive loop yields to other tasks.
+
+A matching reset is `Unfiltered`, not `Open` or `Closed`. Receive timeouts are
+tentatively `Filtered`, with uncertainty stated; setup/send failures and other
+receive errors stay `Unknown`. No application banner, service probe, cleanup
+packet, or AI call is part of ACK scanning. No ICMP decoding or retries are added.
+The report receives the scan method separately: full/range scans retain unfiltered
+rows and count hidden timeouts/local failures. Optional AI instructions preserve
+these limits without changing measurements. Raw headers/correlation numbers still
+require external captures for reproducible experiments; record export is deferred.
+
+See the [Alpine qualification guide](experiments/alpine-first-run.md) and
+[SYN-versus-ACK plan](experiments/syn-vs-ack.md). Offline tests are not live findings.
+
 ## SYN response processing
 
 CLI parsing treats `--syn` as a TCP technique modifier: it works alone or with
@@ -309,10 +340,8 @@ ICMP error interpretation, IPv6 SYN, retransmissions, and application probes in
 SYN mode are outside this implementation. Per-probe raw sockets and memory use
 still need evaluation before high-concurrency production use.
 
-The parsed peer TCP sequence number is retained for diagnostics and parser
-tests. It has a field-level dead-code allowance because production matching
-and cleanup currently use the acknowledgment number instead. The entire SYN
-model module is no longer exempt from dead-code checking.
+The parsed peer TCP sequence number is shared with ACK matching, where it is
+checked against the sent acknowledgment number. It needs no dead-code allowance.
 
 Host discovery, other raw-packet scan methods, full service fingerprinting, and
 exploit execution remain outside the current implementation. See [usage](usage.md),

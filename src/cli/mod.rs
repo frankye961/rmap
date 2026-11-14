@@ -24,6 +24,7 @@ struct Options {
     concurrency: Option<usize>,
     mode: Option<ScanMode>,
     use_syn: bool,
+    use_ack: bool,
 }
 
 pub fn parse_cli(args: &[String]) -> Result<CliConfig, String> {
@@ -40,6 +41,7 @@ impl Options {
         match flag {
             "--tcp" | "--udp" => self.set_mode(flag),
             "--syn" => set_flag(&mut self.use_syn, flag),
+            "--ack" => set_flag(&mut self.use_ack, flag),
             "--ai" => set_flag(&mut self.use_ai, flag),
             "--target" => {
                 let targets = targets::parse_targets(next_value(args, flag)?)?;
@@ -95,11 +97,21 @@ impl Options {
     }
 
     fn finish(self) -> Result<CliConfig, String> {
+        if self.use_syn && self.use_ack {
+            return Err(
+                "--syn and --ack select different TCP techniques and cannot be combined".into(),
+            );
+        }
         let mode = if self.use_syn {
             if self.mode == Some(ScanMode::Udp) {
                 return Err("--syn applies to TCP and cannot be combined with --udp".into());
             }
             ScanMode::Syn
+        } else if self.use_ack {
+            if self.mode == Some(ScanMode::Udp) {
+                return Err("--ack applies to TCP and cannot be combined with --udp".into());
+            }
+            ScanMode::Ack
         } else {
             self.mode.unwrap_or(ScanMode::Tcp)
         };

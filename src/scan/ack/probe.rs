@@ -30,7 +30,7 @@ pub(super) fn prepare_probe(_target: SocketAddr) -> Result<PreparedProbe, String
     let _raw_socket = prepare_raw_tcp_socket(_local_ip).map_err(raw_socket_error)?;
     let _registered_socket = register_raw_socket(_raw_socket)?;
     Ok(PreparedProbe {
-        source_socket: _source_socket,
+        _source_socket,
         probe: _probe,
         header: _header,
         socket: _registered_socket,

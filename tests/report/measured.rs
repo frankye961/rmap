@@ -4,6 +4,124 @@ use super::format_result;
 use crate::model::{PortStatus, ScanMode, ScanResult};
 
 #[test]
+fn displays_ack_reachability_as_unfiltered_without_guessing_a_service() {
+    let result = ScanResult::new(
+        443,
+        ScanMode::Tcp,
+        PortStatus::Unfiltered,
+        Duration::from_millis(10),
+    );
+    let line = format_result(&result);
+    let mut columns = line.split_whitespace();
+    assert_eq!(columns.next(), Some("443/tcp"));
+    assert_eq!(columns.next(), Some("unfiltered"));
+    assert_eq!(columns.next(), Some("-"));
+}
+
+fn ack_results() -> Vec<ScanResult> {
+    [
+        PortStatus::Unfiltered,
+        PortStatus::Filtered,
+        PortStatus::Unknown,
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, status)| {
+        let mut result = ScanResult::new(index as u16 + 1, ScanMode::Tcp, status, Duration::ZERO);
+        match status {
+            PortStatus::Unfiltered => result.observation = Some("Matching ACK-probe reset".into()),
+            PortStatus::Filtered => result.error = Some("fixture ACK receive timeout".into()),
+            _ => result.error = Some("fixture local socket failure".into()),
+        }
+        result
+    })
+    .collect()
+}
+
+#[test]
+fn ack_reports_keep_reset_rows_and_count_hidden_timeouts_and_local_failures() {
+    let results = ack_results();
+    for open_only in [false, true] {
+        let mut output = Vec::new();
+        super::write_results(
+            &mut output,
+            "192.0.2.21",
+            &results,
+            open_only,
+            ScanMode::Ack,
+        )
+        .unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("Method: TCP ACK"));
+        assert!(output.contains("1/tcp"));
+        assert_eq!(output.contains("2/tcp"), !open_only);
+        assert_eq!(output.contains("3/tcp"), !open_only);
+        assert!(
+            output.contains(
+                "ACK summary: 1 unfiltered; 1 timed out; 1 undetermined; ports scanned: 3."
+            )
+        );
+        assert!(output.contains("the port may be open or closed"));
+        assert!(output.contains("does not prove a new TCP connection is allowed"));
+        assert!(output.contains("filtering is unconfirmed"));
+        assert!(output.contains("Example failure: fixture local socket failure"));
+        assert!(!output.contains("No open ports"));
+        assert!(!output.contains("Open ports shown"));
+    }
+    assert_eq!(results.len(), 3);
+    assert_eq!(results[0].status, PortStatus::Unfiltered);
+    assert_eq!(results[1].status, PortStatus::Filtered);
+    assert_eq!(results[2].status, PortStatus::Unknown);
+}
+
+#[test]
+fn ack_report_without_resets_never_claims_no_open_ports_or_confirmed_filtering() {
+    let results = ack_results();
+    for results in [&results[1..2], &results[1..]] {
+        let mut output = Vec::new();
+        super::write_results(&mut output, "192.0.2.21", results, true, ScanMode::Ack).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("ACK summary: 0 unfiltered; 1 timed out;"));
+        assert!(output.contains("filtering is unconfirmed"));
+        assert!(!output.contains("No open ports"));
+        assert!(!output.contains("Open ports shown"));
+    }
+}
+
+#[test]
+fn ack_cli_range_selection_reaches_the_report_without_hiding_resets() {
+    let args = ["--ack", "--target", "192.0.2.21", "--ports", "1-3"].map(String::from);
+    let config = crate::cli::parse_cli(&args).unwrap();
+    let mut output = Vec::new();
+    super::write_results(
+        &mut output,
+        &config.target[0],
+        &ack_results(),
+        config.open_only,
+        config.mode,
+    )
+    .unwrap();
+    let output = String::from_utf8(output).unwrap();
+    assert!(output.contains("1/tcp"));
+    assert!(!output.contains("2/tcp"));
+    assert!(!output.contains("3/tcp"));
+    assert!(output.contains("ACK summary: 1 unfiltered; 1 timed out; 1 undetermined"));
+}
+
+#[test]
+fn an_empty_ack_report_still_identifies_the_method() {
+    let mut output = Vec::new();
+    super::write_results(&mut output, "192.0.2.21", &[], true, ScanMode::Ack).unwrap();
+    let output = String::from_utf8(output).unwrap();
+    assert!(output.contains("Method: TCP ACK"));
+    assert!(
+        output
+            .contains("ACK summary: 0 unfiltered; 0 timed out; 0 undetermined; ports scanned: 0.")
+    );
+    assert!(!output.contains("No open ports"));
+}
+
+#[test]
 fn displays_smb_dialect_as_protocol_evidence_without_a_software_version() {
     let detail = "SMB protocol dialect 0x0210 negotiated successfully";
     let information =
@@ -193,7 +311,7 @@ fn advertised_mapping_table_does_not_add_measured_open_ports() {
         },
     ]);
     let mut output = Vec::new();
-    super::write_results(&mut output, "192.0.2.21", &results, true).unwrap();
+    super::write_results(&mut output, "192.0.2.21", &results, true, ScanMode::Tcp).unwrap();
     let output = String::from_utf8(output).unwrap();
     assert!(output.contains("RPC registrations advertised by 111/tcp"));
     assert!(output.contains("connectivity has not been tested by enumeration"));
@@ -221,7 +339,7 @@ fn report_distinguishes_an_empty_dump_from_no_successful_enumeration() {
     results[0].transport = ScanMode::Tcp;
     results[0].service = Some("rpcbind".into());
     let mut output = Vec::new();
-    super::write_results(&mut output, "192.0.2.21", &results, false).unwrap();
+    super::write_results(&mut output, "192.0.2.21", &results, false, ScanMode::Tcp).unwrap();
     assert!(
         !String::from_utf8(output)
             .unwrap()
@@ -230,7 +348,7 @@ fn report_distinguishes_an_empty_dump_from_no_successful_enumeration() {
 
     results[0].rpc_mappings = Some(Vec::new());
     let mut output = Vec::new();
-    super::write_results(&mut output, "192.0.2.21", &results, false).unwrap();
+    super::write_results(&mut output, "192.0.2.21", &results, false, ScanMode::Tcp).unwrap();
     let output = String::from_utf8(output).unwrap();
     assert!(output.contains("RPC registrations advertised by 111/tcp"));
     assert!(output.contains("No registrations advertised."));
@@ -241,7 +359,14 @@ fn only_open_onlys_hide_non_open_rows_without_changing_measurements() {
     let results = measured_results();
     for open_only in [false, true] {
         let mut output = Vec::new();
-        super::write_results(&mut output, "192.0.2.21", &results, open_only).unwrap();
+        super::write_results(
+            &mut output,
+            "192.0.2.21",
+            &results,
+            open_only,
+            ScanMode::Tcp,
+        )
+        .unwrap();
         let output = String::from_utf8(output).unwrap();
         assert!(output.contains("1/udp"));
         for port in 2..=5 {
@@ -261,7 +386,14 @@ fn only_open_onlys_hide_non_open_rows_without_changing_measurements() {
 fn open_only_without_open_ports_prints_an_explicit_message() {
     let results = measured_results();
     let mut output = Vec::new();
-    super::write_results(&mut output, "192.0.2.21", &results[1..], true).unwrap();
+    super::write_results(
+        &mut output,
+        "192.0.2.21",
+        &results[1..],
+        true,
+        ScanMode::Tcp,
+    )
+    .unwrap();
     let output = String::from_utf8(output).unwrap();
     assert!(output.contains("No open ports confirmed; 1 of 4 probes were undetermined."));
     assert!(output.contains("Undetermined probes: 1."));
@@ -280,7 +412,7 @@ fn open_only_report_exposes_local_failures_without_printing_non_open_rows() {
         )
     });
     let mut output = Vec::new();
-    super::write_results(&mut output, "192.0.2.21", &results, true).unwrap();
+    super::write_results(&mut output, "192.0.2.21", &results, true, ScanMode::Tcp).unwrap();
     let output = String::from_utf8(output).unwrap();
     assert!(output.contains("No open ports confirmed; 2 of 2 probes were undetermined."));
     assert!(output.contains("Too many open files"));
@@ -292,7 +424,14 @@ fn open_only_report_exposes_local_failures_without_printing_non_open_rows() {
 fn open_only_report_without_local_failures_keeps_the_empty_scan_message() {
     let mut output = Vec::new();
     let results = measured_results();
-    super::write_results(&mut output, "192.0.2.21", &results[1..4], true).unwrap();
+    super::write_results(
+        &mut output,
+        "192.0.2.21",
+        &results[1..4],
+        true,
+        ScanMode::Tcp,
+    )
+    .unwrap();
     let output = String::from_utf8(output).unwrap();
     assert!(output.contains("No open ports found among 3 scanned ports."));
     assert!(!output.contains("Undetermined probes:"));

@@ -1,6 +1,6 @@
 # rmap (ALPHA version)
 
-Current version: **0.5.6**.
+Current version: **0.6.0**.
 
 rmap is my research project in networking and cybersecurity. It began as a way
 to learn Rust and network programming and has grown into a network scanner
@@ -32,7 +32,7 @@ provides the scanning and service-identification foundation. See
 
 | Area | Current behavior |
 | --- | --- |
-| Scanning | TCP connect, UDP empty-datagram probes, Linux raw-socket TCP SYN |
+| Scanning | TCP connect, UDP empty-datagram probes, Linux raw-socket TCP SYN and ACK |
 | Target selection | IPv4 lists and CIDR, first-occurrence deduplication, up to 4,096 unique hosts |
 | Scheduling | Bounded Tokio concurrency with descriptor budgeting; hosts run sequentially |
 | Passive identification | SSH, supported FTP/SMTP greetings, and HTTP response prefixes |
@@ -40,11 +40,11 @@ provides the scanning and service-identification foundation. See
 | Evidence | Measured states, timings, raw passive banners, read/probe diagnostics, structured service information |
 | AI research | Optional DeepSeek interpretation with Brave web evidence and optional local advisories |
 
-Release **0.5.6** reorganizes modules, splits large functions, centralizes
-shared constants, and separates detailed documentation into focused guides.
-Scanning behavior is preserved. SMB2 identification, introduced in **0.5.5**,
-retains established open-port measurements when probes fail. A negotiated
-protocol revision is kept separate from an unknown software version or OS.
+Release **0.6.0** adds `--ack`: bounded TCP ACK probes, validated reset
+correlation, and reports that distinguish `unfiltered` reachability from
+service state. ACK timeouts retain uncertainty and local failures stay visible.
+TCP connect, UDP, SYN and service identification remain available. The ACK
+implementation passes offline tests; live lab qualification remains to be done.
 
 Open ports and advertised banners do not prove vulnerability. UDP silence and
 TCP timeouts retain uncertainty. RPC registrations are advertised endpoints,
@@ -87,12 +87,28 @@ addresses such as `192.0.2.10` stand in for your own authorized lab targets.
 Only `--target` is required. Defaults are TCP connect, ports **1–65535**, a
 **1000 ms** timeout, and up to **256** concurrent probes (maximum **1024**,
 subject to descriptor budgeting). Full scans and port lists containing ranges
-show only confirmed-open rows; individual-port lists show all outcomes.
+show only confirmed-open rows, or `unfiltered` rows in ACK mode;
+individual-port lists show all outcomes. Hidden ACK timeouts and local failures
+remain counted in the report.
 
 `--syn` selects TCP SYN discovery and can be combined with `--tcp`, but not
 `--udp`. It requires Linux raw-socket privileges (`CAP_NET_RAW`) and does not
 collect application banners. See the [usage guide](docs/usage.md) for all flags,
 port exclusions, timing, permissions, and troubleshooting.
+
+`--ack` selects TCP reachability probing, alone or with `--tcp`. It cannot be
+combined with `--syn` or `--udp` and also requires `CAP_NET_RAW`. A matching reset
+is `unfiltered`: it identifies neither an open nor a closed service and does not
+prove a new TCP connection is allowed. ACK sends no application probes.
+
+```bash
+sudo ./target/release/rmap --ack --target 192.0.2.10 --ports 18080 --timeout-ms 1000 --concurrency 1
+```
+
+Replace the documentation address with your authorized target. Begin with the
+[guided Alpine lab qualification](docs/experiments/alpine-first-run.md), then use
+the [SYN-versus-ACK experiment plan](docs/experiments/syn-vs-ack.md). Expected
+outcomes in those guides are predictions, not recorded findings.
 
 ## Optional AI research
 

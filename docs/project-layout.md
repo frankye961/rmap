@@ -29,6 +29,8 @@ src/
 │   ├── mod.rs                  Validate scan settings and dispatch work
 │   ├── worker.rs               Bounded tasks and ordered results
 │   ├── resources.rs            Descriptor budgeting
+│   ├── ack/{mod,constants,packet,probe,reply}.rs  TCP ACK preparation and observations
+│   ├── raw_tcp/{mod,constants,checksum,packet,socket}.rs  Shared raw TCP support
 │   ├── identify.rs             Passive SSH/HTTP/FTP/SMTP recognition
 │   ├── http.rs                 HTTP/HTTPS HEAD probes and header parsing
 │   ├── nfs.rs                  NFSv3 NULL using shared RPC exchange
@@ -94,6 +96,8 @@ the scanning engine.
 | NFS program, version, candidate port | `src/scan/nfs.rs` |
 | SMB wire values and reply limit | `src/scan/smb/constants.rs` |
 | SYN sizes, flags, window and cleanup budget | `src/scan/syn/constants.rs` |
+| Shared raw TCP wire values and maximum packet size | `src/scan/raw_tcp/constants.rs` |
+| ACK window and shared wire-value imports | `src/scan/ack/constants.rs` |
 | Provider timeout, tokens, turns, observations and search bounds | `src/ai/constants.rs` |
 | Local advisory file/record limits | `src/ai/retrieval.rs` |
 | Console formatting and progress intervals | `src/report/constants.rs` |

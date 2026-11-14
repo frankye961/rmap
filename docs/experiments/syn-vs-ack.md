@@ -1,8 +1,11 @@
 # Experiment 1: SYN and ACK observations under controlled filtering
 
-Status: **design only; no experimental measurements recorded here**.
-SYN scanning exists in rmap. ACK is an unwired scaffold; there is no working
-`--ack` command yet. This document defines the experiment before its implementation.
+Status: **ready for lab qualification; no experimental measurements recorded here**.
+Version 0.6.0 exposes both `--syn` and `--ack`. Offline checks cover ACK construction,
+correlation, deadlines and reporting; they do not establish live network accuracy.
+Begin with the [guided Alpine qualification](alpine-first-run.md), then execute
+the conditions below. No live validation or firewall changes were performed as
+part of implementation.
 
 ## Research question
 
@@ -114,6 +117,21 @@ Nmap can provide an additional reference measurement. Record its version and
 exact options separately: its scheduling and retransmission behavior may differ
 from rmap. Agreement with Nmap is useful corroboration, not independent ground truth.
 
+Use the same freshly built binary for both methods, replacing `192.0.2.10` with
+your authorized target. Run these separately, leaving at least one second between
+attempts; alternate the order for successive pairs:
+
+```bash
+sudo ./target/release/rmap --syn --target 192.0.2.10 --ports 18080 --timeout-ms 1000 --concurrency 1
+sudo ./target/release/rmap --ack --target 192.0.2.10 --ports 18080 --timeout-ms 1000 --concurrency 1
+```
+
+These commands are instructions, not measured examples. A single port keeps all
+outcomes visible; a range uses method-specific filtering. ACK summaries count
+unfiltered responses, timeouts and local failures separately. Disable AI for
+this experiment by omitting `--ai`. Keep packet captures: raw headers, source
+ports and correlation numbers are not exported by the console report.
+
 ## Records and measurements
 
 Keep records manually outside the application for now; durable export is not
@@ -159,4 +177,4 @@ to plan the artifacts another person would need to repeat the study.
 The first research step is complete when the question, hypothesis and expected
 conditions are understood, and the actual lab topology, listener and filtering
 boundary have been chosen and written down. Measurements remain pending until
-the ACK implementation is ready and the controlled runs have actually occurred.
+the controls have been qualified and the controlled runs have actually occurred.

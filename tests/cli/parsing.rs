@@ -11,6 +11,72 @@ fn syn_mode_is_optional_and_tcp_connect_remains_the_default() {
 }
 
 #[test]
+fn ack_selects_a_tcp_technique_with_or_without_an_explicit_transport() {
+    for flags in [
+        vec!["--ack"],
+        vec!["--tcp", "--ack"],
+        vec!["--ack", "--tcp"],
+    ] {
+        let config = parse_cli(&arguments(&flags)).unwrap();
+        assert_eq!(config.mode, ScanMode::Ack);
+        assert_eq!(config.mode.transport(), ScanMode::Tcp);
+        assert_eq!(config.mode.as_str(), "ack");
+        assert_eq!(config.ports, ["22", "80"]);
+        assert!(!config.open_only);
+    }
+}
+
+#[test]
+fn ack_rejects_udp_syn_and_duplicate_flags_in_either_order() {
+    for flags in [
+        vec!["--ack", "--udp"],
+        vec!["--udp", "--ack"],
+        vec!["--ack", "--syn"],
+        vec!["--syn", "--ack"],
+        vec!["--ack", "--ack"],
+        vec!["--tcp", "--ack", "--tcp"],
+        vec!["--tcp", "--ack", "--syn"],
+    ] {
+        assert!(parse_cli(&arguments(&flags)).is_err(), "accepted {flags:?}");
+    }
+}
+
+#[test]
+fn ack_keeps_full_range_defaults_and_range_filtering() {
+    let args = ["--ack", "--target", "192.0.2.21"].map(String::from);
+    let config = parse_cli(&args).unwrap();
+    assert_eq!(config.mode, ScanMode::Ack);
+    assert_eq!(config.ports.len(), 65535);
+    assert!(config.open_only);
+    assert_eq!(config.timeout.as_millis(), 1000);
+    assert_eq!(config.concurrency, crate::settings::DEFAULT_CONCURRENCY);
+
+    let args = [
+        "--ack",
+        "--target",
+        "192.0.2.21",
+        "--ports",
+        "80-82",
+        "--concurrency",
+        "1",
+    ]
+    .map(String::from);
+    let config = parse_cli(&args).unwrap();
+    assert_eq!(config.ports, ["80", "81", "82"]);
+    assert!(config.open_only);
+    assert_eq!(config.concurrency, 1);
+}
+
+#[test]
+fn usage_documents_ack_and_its_distinction_from_service_state() {
+    let usage = super::usage();
+    assert!(usage.contains("--syn | --ack"));
+    assert!(usage.contains("CAP_NET_RAW"));
+    assert!(usage.contains("unfiltered results for --ack"));
+    assert!(usage.contains("do not establish whether a service is open or closed"));
+}
+
+#[test]
 fn tcp_syn_flags_are_accepted_in_either_order() {
     for flags in [["--tcp", "--syn"], ["--syn", "--tcp"]] {
         assert_eq!(parse_cli(&arguments(&flags)).unwrap().mode, ScanMode::Syn);
