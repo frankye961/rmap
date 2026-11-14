@@ -6,9 +6,33 @@ Each report row includes the port, connection state, an optional service label, 
 | --- | --- |
 | `open` | The TCP connection succeeded or a UDP response was received. This alone does not identify a service or prove a vulnerability. |
 | `closed` | The TCP connection was refused, or the OS reported a refused UDP probe. |
-| `filtered` | The connection timed out. Filtering is a tentative explanation, not a confirmed fact. |
+| `filtered` | The TCP connect attempt or SYN/ACK probe timed out without a matching response. Filtering is a tentative explanation, not a confirmed fact. |
+| `unfiltered` | A TCP reset matched an ACK probe's reversed endpoints and echoed acknowledgment value. It establishes neither an open nor a closed service, nor that a new connection is permitted. |
 | `open\|filtered` | No UDP response arrived before the read timeout; an open service may silently ignore the probe. |
 | `undetermined` | Another socket or I/O error prevented classification. |
+
+## ACK reachability reports
+
+`--ack` reports the method separately from `/tcp`, which remains the transport.
+An individual-port list shows all outcomes. Full-range scans and lists containing
+ranges show `unfiltered` rows and summarize every reset, receive timeout and local
+failure, including outcomes hidden from the table. A timeout-only ACK scan does
+not print “No open ports”; ACK cannot establish that claim.
+
+Elapsed ACK time includes setup, sending and reception. Setup precedes one shared
+send/receive deadline. Setup and send errors are `undetermined`, even when a send
+fails with a timeout: without a successful send there is no remote-response
+observation. Receive timeouts are tentative `filtered`; other receive errors are
+`undetermined`. The original diagnostic is retained. No application banners or
+service identification are collected, and no reset-cleanup packet is required.
+Unknown service fields remain empty.
+
+ACK summary counts cover all collected results. Matching checks IPv4/TCP lengths
+and checksums, reversed IP addresses/ports, the RST flag and the reset sequence
+against the outgoing ACK number. Malformed or unrelated packets are ignored
+under the original deadline. ICMP interpretation and retries are not implemented;
+retain packet captures to investigate silence or unexpected replies. Console
+output does not persist the raw headers or the probe's sequence/ACK values.
 
 For most open TCP ports, the scanner passively reads up to 512 bytes, stopping at a newline, a read timeout, a closed connection, or the byte limit. `ScanResult.banner` preserves the collected bytes, while `observation` records the stop reason separately. A complete supported SSH identification line gives the port an `ssh` service label. For OpenSSH, identification also stores the product, software version, and optional distribution comments separately; for example, `OpenSSH`, `10.0p2`, and `Debian-7+deb13u4`. Unknown SSH implementations retain an `ssh` label without guessed product/version fields. Other banners are retained even when the service is unknown.
 

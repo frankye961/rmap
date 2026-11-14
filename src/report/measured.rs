@@ -1,12 +1,18 @@
 //! Presentation of measured results and separate AI interpretation.
 
 use super::constants::{ERROR_PREVIEW_BYTES, RPC_TABLE_WIDTH, SCAN_TABLE_WIDTH};
-use crate::model::{PortStatus, ScanResult};
+use crate::model::{PortStatus, ScanMode, ScanResult};
 use crate::utils::banner::{PREVIEW_BYTES, escape_bytes};
 
-pub fn print_results(target: &str, results: &[ScanResult], open_only: bool) {
-    write_results(&mut std::io::stdout().lock(), target, results, open_only)
-        .expect("Failed to print scan results");
+pub fn print_results(target: &str, results: &[ScanResult], open_only: bool, mode: ScanMode) {
+    write_results(
+        &mut std::io::stdout().lock(),
+        target,
+        results,
+        open_only,
+        mode,
+    )
+    .expect("Failed to print scan results");
 }
 
 fn write_results(
@@ -14,8 +20,15 @@ fn write_results(
     target: &str,
     results: &[ScanResult],
     open_only: bool,
+    mode: ScanMode,
 ) -> std::io::Result<()> {
     writeln!(output, "Scan results for {target}\n")?;
+    if mode == ScanMode::Ack {
+        writeln!(
+            output,
+            "Method: TCP ACK; reachability evidence, not service state.\n"
+        )?;
+    }
     writeln!(
         output,
         "{:<9} {:<14} {:<9} {:>11}  DETAIL",
@@ -23,19 +36,60 @@ fn write_results(
     )?;
     writeln!(output, "{}", "-".repeat(SCAN_TABLE_WIDTH))?;
 
+    let selected_state = if mode == ScanMode::Ack {
+        PortStatus::Unfiltered
+    } else {
+        PortStatus::Open
+    };
     let mut displayed = 0;
     for result in results {
-        if !open_only || result.status == PortStatus::Open {
+        if !open_only || result.status == selected_state {
             writeln!(output, "{}", format_result(result))?;
             displayed += 1;
         }
     }
-    if open_only {
+    if mode == ScanMode::Ack {
+        write_ack_summary(output, results)?;
+    } else if open_only {
         write_open_summary(output, results, displayed)?;
     } else {
         write_timeout_notes(output, results)?;
     }
     write_rpc_mappings(output, results)?;
+    Ok(())
+}
+
+fn write_ack_summary(
+    output: &mut impl std::io::Write,
+    results: &[ScanResult],
+) -> std::io::Result<()> {
+    let count = |status| {
+        results
+            .iter()
+            .filter(|result| result.status == status)
+            .count()
+    };
+    let unfiltered = count(PortStatus::Unfiltered);
+    let timed_out = count(PortStatus::Filtered);
+    let undetermined = count(PortStatus::Unknown);
+    writeln!(
+        output,
+        "\nACK summary: {unfiltered} unfiltered; {timed_out} timed out; {undetermined} undetermined; ports scanned: {}.",
+        results.len()
+    )?;
+    writeln!(
+        output,
+        "unfiltered = matching TCP reset received; the port may be open or closed. This does not prove a new TCP connection is allowed."
+    )?;
+    if timed_out > 0 {
+        writeln!(
+            output,
+            "filtered = no matching TCP response before ACK receive timeout; filtering is unconfirmed."
+        )?;
+    }
+    if undetermined > 0 {
+        write_undetermined(output, results, undetermined)?;
+    }
     Ok(())
 }
 
@@ -173,6 +227,7 @@ fn format_result(result: &ScanResult) -> String {
         PortStatus::Filtered => "filtered",
         PortStatus::OpenOrFiltered => "open|filtered",
         PortStatus::Unknown => "undetermined",
+        PortStatus::Unfiltered => "unfiltered",
     };
     let detail = if let Some(error) = &result.error {
         error.clone()

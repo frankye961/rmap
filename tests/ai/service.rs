@@ -4,6 +4,30 @@ use rig::http_client::Error as HttpError;
 use super::describe_ai_error;
 
 #[test]
+fn ack_context_preserves_reset_and_timeout_uncertainty_without_service_claims() {
+    use crate::model::{PortStatus, ScanMode, ScanResult};
+    use std::time::Duration;
+
+    let mut reset = ScanResult::new(443, ScanMode::Tcp, PortStatus::Unfiltered, Duration::ZERO);
+    reset.observation = Some(
+        "Matching TCP RST received in response to ACK probe; service state is undetermined".into(),
+    );
+    let mut silent = ScanResult::new(
+        80,
+        ScanMode::Tcp,
+        PortStatus::Filtered,
+        Duration::from_secs(1),
+    );
+    silent.error = Some("ACK receive timed out; filtering is unconfirmed".into());
+    let prompt = super::build_prompt(&[reset, silent], &[]);
+    assert!(prompt.contains("443/tcp: state Unfiltered; service label unknown"));
+    assert!(prompt.contains("service state is undetermined"));
+    assert!(prompt.contains("80/tcp: state Filtered; service label unknown"));
+    assert!(prompt.contains("ACK receive timed out; filtering is unconfirmed"));
+    assert!(!prompt.contains("state Open"));
+}
+
+#[test]
 fn includes_smb_dialect_without_inventing_a_software_version_in_ai_context() {
     use crate::mapper::service_information::map_tcp_service;
     use crate::model::{PortStatus, ScanMode, ScanResult};

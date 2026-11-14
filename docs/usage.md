@@ -14,7 +14,7 @@ limits the list to 128 entries. The two RPC exchanges run sequentially after
 the initial TCP measurement, so total identification may use two timeout budgets.
 Enumeration failure preserves `rpcbind` and the initial open-port result. Listed
 endpoints are not automatically probed or counted as measured open ports.
-UDP and SYN modes do not perform these probes.
+UDP, SYN and ACK modes do not perform these probes.
 See [RPC learning notes](rpc-identification.md).
 
 Confirmed-open TCP port 2049 automatically receives an NFSv3 NULL probe, even
@@ -22,7 +22,7 @@ when port 111 is not selected. A validated reply supplies `nfs` and the detail
 `RPC program 100003; NFS protocol version 3; NULL procedure succeeded`.
 The probe has its own `--timeout-ms` identification budget and a 4096-byte reply
 limit. Failures preserve the open state. This first NFS implementation supports
-NFSv3 over TCP port 2049; it does not probe UDP, SYN results, or additional ports
+NFSv3 over TCP port 2049; it does not probe UDP, SYN/ACK results, or additional ports
 listed in RPC registrations. See [NFS learning notes](nfs-identification.md).
 
 Confirmed-open TCP port 445 automatically receives an SMB2 NEGOTIATE probe offering
@@ -30,7 +30,7 @@ Confirmed-open TCP port 445 automatically receives an SMB2 NEGOTIATE probe offer
 software version and OS remain unknown. It has one `--timeout-ms` identification
 budget across connect/write/read and a 4096-byte reply limit. Failures preserve
 the measured open state and append a diagnostic. It does not authenticate,
-enumerate shares, or probe port 139, UDP, or SYN results. Live interoperability
+enumerate shares, or probe port 139, UDP, or SYN/ACK results. Live interoperability
 has not been validated; automated tests use fixtures and in-memory streams.
 See [SMB identification and learning notes](smb-identification.md).
 
@@ -60,16 +60,17 @@ rmap --help
 Cargo's installation directory, usually `~/.cargo/bin`, must be on `PATH`. Reinstall after source changes when invoking the installed `rmap`; building the project alone does not update that executable.
 
 After installation, `rmap --help` prints the startup banner with version
-`v0.5.6` without starting a scan. The same check can be made directly with
+`v0.6.0` without starting a scan. The same check can be made directly with
 `./target/release/rmap --help`.
 
 ## CLI options
 
 | Option | Meaning |
 | --- | --- |
-| `--tcp` | Select TCP; normal connect scanning unless `--syn` is also supplied (TCP is the default) |
+| `--tcp` | Select TCP; normal connect scanning unless `--syn` or `--ack` is also supplied (TCP is the default) |
 | `--udp` | Send an empty UDP probe to each selected port and wait for a response |
 | `--syn` | Run IPv4 TCP SYN discovery using Linux raw sockets; requires `CAP_NET_RAW`, no banner grabbing |
+| `--ack` | Run IPv4 TCP ACK reachability probes; matching resets are `unfiltered`, not evidence of a listening service; requires `CAP_NET_RAW`, no banner grabbing |
 | `--target TARGET[,TARGET...]` | IPv4 addresses and CIDR subnets; at most 4,096 unique targets, deduplicated in first-occurrence order; hostnames and IPv6 are not accepted |
 | `--ports LIST` | Comma-separated ports and inclusive ranges, such as `22,80-82,443`; omitting it selects all ports from 1 through 65535 |
 | `--exclude-ports LIST` | Ports and inclusive ranges to remove from an earlier explicit `--ports` list; may be given once and must leave at least one selected port |
@@ -78,12 +79,40 @@ After installation, `rmap --help` prints the startup banner with version
 | `--ai` | Request DeepSeek interpretation after the scan report |
 | `--help`, `-h` | Show command syntax without scanning |
 
-Only `--target` is required. Without a transport flag, rmap uses TCP. Without `--ports`, it selects ports 1–65535. Without `--timeout-ms`, it uses 1000 ms. `--tcp` and `--udp` cannot be combined or repeated. `--syn` can be supplied alone or with `--tcp` in either order; it cannot be repeated or combined with `--udp`. Explicit `--ports` and `--timeout-ms` flags still require valid, nonempty values; invalid input stops the run before any connection attempt.
+Only `--target` is required. Without a transport flag, rmap uses TCP. Without `--ports`, it selects ports 1–65535. Without `--timeout-ms`, it uses 1000 ms. `--tcp` and `--udp` cannot be combined or repeated. `--syn` and `--ack` each work alone or with `--tcp` in either order; neither may be repeated or combined with the other or `--udp`. Explicit `--ports` and `--timeout-ms` flags still require valid, nonempty values; invalid input stops the run before any connection attempt.
 
 
-## Select TCP connect, TCP SYN, or UDP
+## Select TCP connect, TCP SYN, TCP ACK, or UDP
 
-Only `--target` is required; it accepts a comma-separated list of numeric IPv4 addresses and CIDR subnets. Omit the mode flags to use TCP connect, or select `--udp` or `--syn` explicitly. `--tcp` and `--udp` cannot be combined or repeated. `--syn` works alone or with `--tcp` in either order; it cannot be repeated or combined with `--udp`. Omit `--timeout-ms` to use 1000 milliseconds, or supply a positive integer to override it. Optionally select comma-separated ports and inclusive ranges from 1 through 65535 with `--ports`, for example `22,80-82,443`. Omitting `--ports` selects all 65535 ports in ascending order. An explicitly empty value or a `--ports` flag without a value is rejected. Hostnames and IPv6 are not accepted. Probes run concurrently, with up to 256 active tasks by default. The final report preserves the supplied port order, regardless of completion order.
+Only `--target` is required; it accepts a comma-separated list of numeric IPv4 addresses and CIDR subnets. Omit the mode flags to use TCP connect, or select `--udp`, `--syn`, or `--ack` explicitly. `--tcp` and `--udp` cannot be combined or repeated. `--syn` or `--ack` works alone or with `--tcp` in either order; they cannot be combined with each other or `--udp`, or repeated. Omit `--timeout-ms` to use 1000 milliseconds, or supply a positive integer to override it. Optionally select comma-separated ports and inclusive ranges from 1 through 65535 with `--ports`, for example `22,80-82,443`. Omitting `--ports` selects all 65535 ports in ascending order. An explicitly empty value or a `--ports` flag without a value is rejected. Hostnames and IPv6 are not accepted. Probes run concurrently, with up to 256 active tasks by default. The final report preserves the supplied port order, regardless of completion order.
+
+### ACK mode
+
+`--ack` (or `--tcp --ack`) sends a bare TCP ACK using Linux raw sockets.
+Like SYN it checks raw-socket availability before scheduling and reserves two
+sockets per probe for descriptor budgeting. A matching reset is `unfiltered`;
+it does not establish whether an application is listening or whether a new TCP
+connection is allowed. No banner grabbing or application probes run.
+
+There is one deadline for sending and reception, beginning after setup. A receive
+timeout is tentative `filtered`; setup/send failures and other receive errors are
+`undetermined`. Errors remain separate from response observations. Full/range
+scans display `unfiltered` rows, with counts for all timeouts and local failures.
+Individual-port lists display every outcome. See [result semantics](results.md).
+
+Exit conventions are unchanged: invalid CLI input exits 2, scan-level failures
+(including unavailable raw sockets) exit 1, and a completed run exits 0. A
+completed run may contain per-port `undetermined` failures; inspect the report
+and stderr. AI errors do not replace measured outcomes or change these rules.
+
+```bash
+sudo ./target/release/rmap --ack --target 192.0.2.10 --ports 18080 --timeout-ms 1000 --concurrency 1
+```
+
+Replace the address with your authorized target. Start with the
+[Alpine first-run guide](experiments/alpine-first-run.md) and
+[SYN-versus-ACK experiment plan](experiments/syn-vs-ack.md). Raw behavior has not
+been live-validated by the assistant; do not treat expected outcomes as findings.
 
 ### SYN mode
 
@@ -128,7 +157,7 @@ The selected list becomes 80,443; the same exclusion behavior applies to UDP. Re
 rmap --target 192.0.2.21 --ports 22,80-84,443 --exclude-ports 81-83
 ```
 
-This scans 22,80,84,443. Any `--ports` list containing a range displays only confirmed open ports, including this mixed list and `--ports 1-65535`. All selected ports are still probed.
+This scans 22,80,84,443. Any `--ports` list containing a range displays only confirmed open ports, or unfiltered responses in ACK mode, including this mixed list and `--ports 1-65535`. All selected ports are still probed.
 
 The minimal command uses TCP, ports 1–65535, and a 1000 ms timeout:
 
@@ -196,7 +225,7 @@ After rebuilding changes, use `./target/release/rmap` directly or reinstall with
 `cargo install --path . --locked`; an existing installed binary is not replaced
 by `cargo build --release`.
 
-When `--ports` is omitted or its value contains a range, only confirmed `open` ports are printed in the measured table. UDP `open|filtered` rows are hidden. The report gives the number of open ports shown and total scanned, or says no open ports were found. This filters presentation only: all outcomes remain available for progress and bounded AI context. With an explicit list of individual ports, every selected outcome is displayed. A range in exclusions alone does not change this mode.
+When `--ports` is omitted or its value contains a range, only confirmed `open` ports are printed in the measured table, or `unfiltered` results in ACK mode. UDP `open|filtered` rows are hidden. TCP connect, SYN and UDP reports give the number of open ports shown and total scanned, or say no open ports were found. ACK reports instead count unfiltered responses, timeouts and local failures without making an open-port claim. This filters presentation only: all outcomes remain available for progress and bounded AI context. With an explicit list of individual ports, every selected outcome is displayed. A range in exclusions alone does not change this mode.
 
 TCP connects and then collects a passive banner, or automatically sends a `HEAD` probe using HTTP on confirmed-open ports 80, 8000, 8080, and 8888, or HTTPS on ports 443 and 8443. The port only selects a probe; a successful response supplies the `http` or `https` service label. UDP sends an empty datagram; protocol-specific UDP requests and service identification are not implemented. A UDP timeout is reported as `open|filtered` because a listening service may ignore that datagram.
 

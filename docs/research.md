@@ -12,7 +12,7 @@ an open port nor an AI-generated CVE candidate establishes exploitability.
 
 ## Current experimental foundation
 
-Version 0.5.6 provides TCP connect, UDP, and Linux IPv4 SYN scanning; bounded
+Version 0.6.0 provides TCP connect, UDP, and Linux IPv4 SYN and ACK scanning; bounded
 concurrent scheduling; passive banner recognition; HTTP/HTTPS probes; and TCP
 portmapper v2 NULL identification followed by DUMP enumeration. Advertised
 registrations remain separate from measured connectivity. Scan measurements and AI interpretation use
@@ -37,7 +37,10 @@ durable assessment records and comparison tooling are future work.
 The [SYN versus ACK experiment plan](experiments/syn-vs-ack.md) asks what additional
 evidence ACK probing provides when SYN receives no response under controlled
 filtering. It defines a hypothesis, controls, expected outcomes and a results
-template. ACK remains scaffolding; the plan contains no measured findings.
+template. ACK is now selectable using `--ack`, with reset correlation and separate
+reachability reporting. The plan contains no measured findings. Start with the
+[Alpine first-run guide](experiments/alpine-first-run.md) to qualify the instrument
+before changing filtering conditions.
 
 ## Service-identification experiment
 

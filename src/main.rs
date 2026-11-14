@@ -48,7 +48,7 @@ fn run(config: &cli::CliConfig) -> Result<(), String> {
             config.concurrency,
             |completed, result| progress.update(completed, result),
         )?;
-        report::print_results(target, &results, config.open_only);
+        report::print_results(target, &results, config.open_only, config.mode);
         if let Some(ai_config) = ai_config.as_ref() {
             print_interpretation(target, ai_config, &results);
         }

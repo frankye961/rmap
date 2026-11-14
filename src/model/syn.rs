@@ -1,4 +1,4 @@
-//! Data passed between SYN packet parsing, reply matching, and cleanup.
+//! Shared parsed TCP data and the original SYN probe retained for correlation.
 
 use std::net::{Ipv4Addr, SocketAddrV4};
 
@@ -15,8 +15,7 @@ pub struct ParsedIpv4Packet<'a> {
 pub struct TcpReply {
     pub source_port: u16,
     pub destination_port: u16,
-    // Preserve the peer's parsed sequence number for diagnostics and parser tests.
-    #[allow(dead_code)]
+    // ACK reset correlation checks this against the outgoing acknowledgment value.
     pub sequence_number: u32,
     pub acknowledgment_number: u32,
     pub flags: u8,

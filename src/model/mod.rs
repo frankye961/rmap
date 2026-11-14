@@ -15,13 +15,14 @@ pub enum ScanMode {
     Tcp,
     Udp,
     Syn,
+    Ack,
 }
 
 impl ScanMode {
-    /// SYN is a scan technique over TCP, not a separate transport protocol.
+    /// SYN and ACK are scan techniques over TCP, not separate transport protocols.
     pub fn transport(self) -> Self {
         match self {
-            Self::Syn => Self::Tcp,
+            Self::Syn | Self::Ack => Self::Tcp,
             mode => mode,
         }
     }
@@ -31,6 +32,7 @@ impl ScanMode {
             Self::Tcp => "tcp",
             Self::Udp => "udp",
             Self::Syn => "syn",
+            Self::Ack => "ack",
         }
     }
 }
@@ -78,6 +80,8 @@ pub enum PortStatus {
     /// No UDP response; the port may be open or filtered.
     OpenOrFiltered,
     Unknown,
+    /// A matching ACK-probe reset; does not establish whether a service is listening.
+    Unfiltered,
 }
 
 pub use ai::{AiAnalysis, CveCandidate, WebSource};

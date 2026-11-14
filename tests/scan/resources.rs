@@ -30,6 +30,10 @@ fn keeps_headroom_and_accounts_for_each_modes_socket_usage() {
         492
     );
     assert_eq!(
+        limit_from_budget(ScanMode::Ack, 1024, 1024, 8).unwrap(),
+        492
+    );
+    assert_eq!(
         limit_from_budget(ScanMode::Udp, 1024, 1024, 8).unwrap(),
         984
     );
@@ -42,7 +46,7 @@ fn keeps_headroom_and_accounts_for_each_modes_socket_usage() {
 
 #[test]
 fn exhausted_budget_is_an_error_instead_of_underflowing() {
-    for mode in [ScanMode::Tcp, ScanMode::Udp, ScanMode::Syn] {
+    for mode in [ScanMode::Tcp, ScanMode::Udp, ScanMode::Syn, ScanMode::Ack] {
         for (limit, open) in [(32, 8), (8, 32), (40, 8)] {
             let error = limit_from_budget(mode, 1024, limit, open).unwrap_err();
             assert!(error.contains("Not enough file descriptors"));
@@ -52,6 +56,8 @@ fn exhausted_budget_is_an_error_instead_of_underflowing() {
     assert_eq!(limit_from_budget(ScanMode::Udp, 1024, 41, 8).unwrap(), 1);
     assert!(limit_from_budget(ScanMode::Syn, 1024, 41, 8).is_err());
     assert_eq!(limit_from_budget(ScanMode::Syn, 1024, 42, 8).unwrap(), 1);
+    assert!(limit_from_budget(ScanMode::Ack, 1024, 41, 8).is_err());
+    assert_eq!(limit_from_budget(ScanMode::Ack, 1024, 42, 8).unwrap(), 1);
 }
 
 #[tokio::test]

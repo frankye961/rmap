@@ -1,3 +1,5 @@
+//! Encode ACK probe headers and calculate their TCP checksums.
+
 use super::AckProbe;
 use super::constants::{DATA_OFFSET_NO_OPTIONS, FLAG_ACK, TCP_HEADER_BYTES};
 use crate::scan::raw_tcp::checksum::apply_tcp_checksum;

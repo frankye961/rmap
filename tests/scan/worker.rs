@@ -154,3 +154,48 @@ async fn zero_workers_is_rejected_and_empty_inputs_need_no_workers() {
         .is_empty()
     );
 }
+
+#[tokio::test]
+async fn ack_worker_keeps_tcp_transport_and_other_results_when_a_task_fails() {
+    let targets = [target(80), target(22), target(443)];
+    let mut completed = 0;
+    let results = run(
+        &targets,
+        2,
+        ScanMode::Ack,
+        |target| async move {
+            if target.port() == 22 {
+                panic!("fixture ACK task failure");
+            }
+            ScanResult::new(
+                target.port(),
+                ScanMode::Tcp,
+                PortStatus::Unfiltered,
+                Duration::ZERO,
+            )
+        },
+        |count, _| completed = count,
+    )
+    .await
+    .unwrap();
+    assert_eq!(completed, 3);
+    assert_eq!(
+        results.iter().map(|result| result.port).collect::<Vec<_>>(),
+        [80, 22, 443]
+    );
+    assert!(
+        results
+            .iter()
+            .all(|result| result.transport == ScanMode::Tcp)
+    );
+    assert_eq!(results[0].status, PortStatus::Unfiltered);
+    assert_eq!(results[1].status, PortStatus::Unknown);
+    assert!(
+        results[1]
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("Probe task failed")
+    );
+    assert_eq!(results[2].status, PortStatus::Unfiltered);
+}

@@ -19,6 +19,8 @@ uncertainty and model interpretation remain distinct.
 - [Research direction](research.md): reproducibility and later assessment work.
 - [SYN versus ACK experiment](experiments/syn-vs-ack.md): question, hypothesis,
   controlled conditions and a results log awaiting measurements.
+- [First Alpine lab run](experiments/alpine-first-run.md): record the setup,
+  qualify listening/non-listening controls, and retain packet evidence.
 - [Original learning checklist](milestone-1.md): historical introductory tasks.
 
 ## Protocol learning guides
