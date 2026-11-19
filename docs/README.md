@@ -21,6 +21,8 @@ uncertainty and model interpretation remain distinct.
   controlled conditions and a results log awaiting measurements.
 - [First Alpine lab run](experiments/alpine-first-run.md): record the setup,
   qualify listening/non-listening controls, and retain packet evidence.
+- [Alpine baseline record](experiments/alpine-baseline-record.md): supplied listener
+  observations, the experimenter's SYN/ACK predictions, and pending measurements.
 - [Original learning checklist](milestone-1.md): historical introductory tasks.
 
 ## Protocol learning guides
