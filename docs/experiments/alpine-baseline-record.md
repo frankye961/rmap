@@ -1,6 +1,7 @@
 # Experiment record: SYN versus ACK on the home server
 
 Record created: 2026-11-19.
+Last discussion update: 2026-11-21.
 
 Status: **predictions recorded; preliminary observations supplied by the
 experimenter; paired SYN/ACK measurements and packet evidence pending**.
@@ -25,11 +26,14 @@ and the broader filtering hypothesis belong to later conditions.
 | --- | --- | --- |
 | Target | Experimenter's own Alpine Linux server | Confirmed by the experimenter; release/kernel version not recorded |
 | Target address | `192.168.100.21/24` on `wlan0` | Supplied `ip -4 addr show` output |
-| Scanner | Separate machine on the same network | Reported by the experimenter; scanner IP, OS version and path/interface details pending |
+| Scanner | Separate machine at `192.168.100.8` on the same network | Address reported on 2026-11-21; OS version and path/interface details pending |
 | Initial candidate ports | TCP 22 and TCP 1883 | Local listener output and reported agreement between Nmap and rmap |
+| First chosen endpoint | `192.168.100.21:1883/tcp` | Chosen on 2026-11-21 to separate probe traffic from SSH management on port 22 |
 | Source position | Same LAN as the target | Exact topology and any intermediate filtering still to document |
 | Firewall tooling | `/usr/sbin/iptables` found | Active rules, backend and controlling service not yet inspected |
-| Other tooling | `nft`, `awall`, `python3` and `tcpdump` were not found in the checked `PATH` | Preliminary tool checks; current installation/availability still to establish |
+| Initial tool checks | `nft`, `awall`, `python3` and `tcpdump` were not found in the checked server `PATH` | Historical observation; does not establish current package availability |
+| Capture tooling, updated | Experimenter now reports tcpdump on both machines | Versions, permissions, capture interfaces and successful recording still to verify |
+| Selected service | Experimenter identifies port 1883 as their MQTT service | Process ownership/version not yet recorded; background traffic has not been measured |
 | Container networking | Docker bridges were present in the supplied interface output | Whether either selected service is containerized is unknown |
 | Project source version | Workspace package declares `0.6.0` | Exact revision, dirty-tree state and executed binary version must be recorded for each run |
 
@@ -78,11 +82,29 @@ The ACK prediction assumes the unsolicited probe and its response can pass along
 the path. This assumption has not been verified. Agreement on a SYN outcome does
 not establish how ACK traffic will be handled. These predictions are not findings.
 
-Packet-level predictions remain for the experimenter to articulate:
+Packet-level predictions articulated during the 2026-11-21 discussion:
 
-- Response flags/evidence expected to support the SYN prediction: **pending**.
-- Response flags/evidence expected to support the ACK prediction: **pending**.
+- SYN to the listening service: expect a server SYN/ACK. The scanning machine then
+  sends RST as cleanup, aborting the half-open handshake without completing the
+  connection. The matching SYN/ACK supports the open observation; the later
+  cleanup is separate evidence.
+- Unsolicited ACK for a nonexistent connection: expect a server RST directly,
+  without a SYN/ACK handshake, assuming the probe and response pass along the path.
 - How a response will be associated with the specific outgoing probe: **pending**.
+
+The experimenter initially suggested ICMP Port Unreachable and a filtered result
+for the ACK probe, then corrected that packet-level expectation to TCP RST before
+any paired measurements were recorded. This is a clarification of the mechanism
+underlying the original state prediction, not a measured result or a retrospective
+change to a finding.
+
+ICMP Port Unreachable is associated with closed UDP ports; ICMP diagnostics can
+also occur along TCP paths, and their type/code matters. TCP has its own reset
+mechanism. In rmap ACK mode, the current implementation does not decode ICMP;
+tentative `filtered` follows a receive timeout without a matching TCP response.
+It does not directly classify a received ICMP error as filtered. Protocol
+references: [RFC 1122](https://www.rfc-editor.org/rfc/rfc1122.html#section-3.2.2.1)
+and [RFC 9293](https://www.rfc-editor.org/rfc/rfc9293.html#section-3.10.7.1).
 
 Keep the original predictions if a trial disagrees. Record the discrepancy and
 investigate it; date and explain any later revision instead of overwriting this
@@ -92,16 +114,74 @@ initial expectation.
 
 | Item | Initial proposal | Status |
 | --- | --- | --- |
-| First endpoint | Choose one of 22 or 1883; examine one port at a time | Choice pending |
+| First endpoint | `192.168.100.21:1883/tcp`; examine one port at a time | Chosen; the initial prediction for port 22 remains above for reference |
 | Timeout | 1000 ms for each method | To confirm and record with the actual command |
 | Concurrency | 1 | To confirm; also record the effective value |
 | AI | Disabled | To confirm |
 | Services and firewall | Preserve the initial configuration during the baseline | Snapshot and verify before running |
-| Capture | Record the outgoing probe and response on scanner and target | Tooling, interfaces and filenames pending |
+| Capture | Use tcpdump on scanner and target | Availability reported; filters, interfaces, permissions, versions and filenames pending |
 | Timing/order | Separate attempts; record their order and timestamps | Follow the paired procedure in the main plan |
 
 This initial comparison does not require stopping a real service. A later
 listening/non-listening control should use a separate controllable test service.
+
+## Reasoning and capture preparation: 2026-11-21
+
+The experimenter wants guided reasoning and small tasks, rather than completed
+commands or answers supplied in advance. Continue by reviewing their proposed
+approach and distinguishing assumptions, predictions and measurements.
+
+### Listener bindings
+
+The experimenter recognized that the listener bound to `192.168.100.21` and the
+wildcard IPv4 listener on `0.0.0.0` can receive traffic addressed to the LAN
+interface. The destination of the remote probe is still `192.168.100.21`;
+`0.0.0.0` is the listener's wildcard binding. Loopback-bound listeners do not
+receive these LAN-addressed connections. Firewall rules can impose additional
+restrictions, so a binding alone does not prove remote reachability.
+
+### Why capture at both ends?
+
+The experimenter explained that they want to see what the scanner sends, what
+the server receives, and what the server sends back. Capture points should let
+us compare:
+
+1. The probe leaving the scanner's network interface.
+2. The probe arriving at the server's interface.
+3. The response leaving the server's interface.
+4. The response arriving back at the scanner.
+
+This helps investigate where an expected packet becomes unobserved. Retain
+capture-drop statistics: absence from a capture alone is not proof of a network
+drop or a particular firewall action. No capture files have been supplied yet.
+
+### Why port 1883?
+
+The experimenter selected 1883 to avoid including the SSH management session on
+22. Their initial assumption that MQTT means only their probe packets will appear
+was identified as something to verify. Existing clients or applications on the
+scanner may also exchange MQTT traffic. Selecting a port or even a host pair does
+not guarantee a quiet capture or identify every packet as a scan probe.
+
+### What “TCP portion of the capture filter” means
+
+This refers to the TCP-selection part of a **tcpdump capture-filter expression**,
+not Rust code, packet construction, or a new scanner function. Its intended scope
+is TCP traffic between `192.168.100.8` and `192.168.100.21` involving port 1883,
+retaining both probe and reply directions. No complete filter expression has
+been proposed, validated or run yet.
+
+The building blocks discussed were `tcp`, `host ADDRESS`, `port NUMBER`, and
+`and`. Without a direction qualifier, a `host` condition matches source or
+destination. The next task is for the experimenter to combine these conditions
+and explain why the reply would also match. See the
+[libpcap capture-filter reference](https://github.com/the-tcpdump-group/libpcap/blob/master/pcap-filter.manmisc.in).
+
+The word “portion” leaves room to decide how to retain relevant ICMP diagnostics
+as well. A TCP-only filter excludes ICMP. We have not yet agreed on that additional
+scope or a final filter, and should not interpret excluded traffic as absent.
+Do not restrict capture to only the predicted response flags: unexpected TCP
+responses and background traffic are useful evidence too.
 
 ## Measurement log
 
@@ -128,9 +208,26 @@ For each trial, retain:
 Keep private captures and configuration artifacts outside source control; record
 their locations here without credentials. No experimental conclusions are recorded.
 
-## Next reasoning step
+## Pause and resume point
 
-Before collecting the first pair, state which packet evidence would support each
-predicted label. Then choose the first endpoint and establish how that evidence
-will be captured. A disagreement between prediction and observation is something
-to explain, not automatically a scanner bug or proof of filtering.
+Paused at the experimenter's request on 2026-11-21. The session established
+packet-level predictions, scanner IP, the first test port, and reported capture
+tool availability. It did not establish a capture filter, capture configuration,
+packet evidence or paired results. No new scan output or firewall changes were
+reported during this session.
+
+When resuming, take one small step at a time:
+
+1. Revisit the meaning of a capture-filter expression if needed. Ask the
+   experimenter to propose the TCP selection for the two hosts and port 1883,
+   keeping both directions, and review their reasoning before running it.
+2. Decide how to retain ICMP diagnostics, then verify capture interfaces,
+   privileges, versions, output locations and capture/drop statistics.
+3. Record the unchanged service/firewall configuration and execution settings;
+   inspect background traffic with rmap idle rather than assuming the port is quiet.
+4. Only after capture preparation, collect the first SYN/ACK pair, retain raw
+   output and captures, and compare actual observations against the predictions.
+
+A disagreement is something to explain, not automatically a scanner bug or proof
+of filtering. Actual response correlation, further controls and repeated paired
+measurements remain work to do. The existing measurement table stays pending.
