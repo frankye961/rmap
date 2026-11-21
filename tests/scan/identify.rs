@@ -171,6 +171,7 @@ fn identifies_nonstandard_port_without_changing_scan_measurements() {
     let bytes = b"SSH-2.0-OpenSSH_10.0p2 Debian-7+deb13u4\r\n".to_vec();
     let mut result = ScanResult {
         port: 2222,
+        method: ScanMode::Tcp,
         transport: ScanMode::Tcp,
         status: PortStatus::Open,
         service: None,
@@ -329,6 +330,7 @@ fn smtp_collection_on_nonstandard_port_preserves_scan_measurements() {
     let bytes = b"220 mail.example.test ESMTP Exim 4.98\r\n".to_vec();
     let mut result = ScanResult {
         port: 2525,
+        method: ScanMode::Tcp,
         transport: ScanMode::Tcp,
         status: PortStatus::Open,
         service: None,

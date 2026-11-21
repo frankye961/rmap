@@ -79,7 +79,7 @@ pub(super) async fn scan_port(_target: SocketAddr, _timeout: Duration) -> ScanRe
 }
 
 fn unknown_result(_target: SocketAddr, _elapsed: Duration, _error: String) -> ScanResult {
-    let mut _result = ScanResult::new(_target.port(), ScanMode::Tcp, PortStatus::Unknown, _elapsed);
+    let mut _result = ScanResult::new(_target.port(), ScanMode::Ack, PortStatus::Unknown, _elapsed);
     _result.error = Some(_error);
     _result
 }

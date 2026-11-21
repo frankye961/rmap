@@ -8,6 +8,7 @@ use super::retrieve_from_text;
 fn retrieves_only_observed_exact_version() {
     let results = vec![ScanResult {
         port: 80,
+        method: ScanMode::Tcp,
         transport: ScanMode::Tcp,
         status: PortStatus::Open,
         service: Some("http".into()),
@@ -33,6 +34,7 @@ fn retrieves_only_observed_exact_version() {
 fn matches_space_separated_ftp_banner_without_version_prefix_false_positive() {
     let result = ScanResult {
         port: 21,
+        method: ScanMode::Tcp,
         transport: ScanMode::Tcp,
         status: PortStatus::Open,
         service: None,

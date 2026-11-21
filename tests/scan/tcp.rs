@@ -13,6 +13,7 @@ use tokio::io::{AsyncRead, AsyncWriteExt, ReadBuf};
 fn measured_open_tcp_port(port: u16) -> ScanResult {
     ScanResult {
         port,
+        method: ScanMode::Tcp,
         transport: ScanMode::Tcp,
         status: PortStatus::Open,
         service: None,

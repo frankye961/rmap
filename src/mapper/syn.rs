@@ -14,7 +14,7 @@ pub fn map_syn_result(
     _error: Option<String>,
     _observation: Option<String>,
 ) -> ScanResult {
-    let mut result = ScanResult::new(_target.port(), ScanMode::Tcp, _status, _elapsed);
+    let mut result = ScanResult::new(_target.port(), ScanMode::Syn, _status, _elapsed);
     result.error = _error;
     result.observation = _observation;
     result

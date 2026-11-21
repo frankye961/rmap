@@ -16,6 +16,7 @@ fn target(port: u16) -> SocketAddr {
 fn result(target: SocketAddr) -> ScanResult {
     ScanResult {
         port: target.port(),
+        method: ScanMode::Tcp,
         transport: ScanMode::Tcp,
         status: PortStatus::Open,
         service: None,
@@ -169,7 +170,7 @@ async fn ack_worker_keeps_tcp_transport_and_other_results_when_a_task_fails() {
             }
             ScanResult::new(
                 target.port(),
-                ScanMode::Tcp,
+                ScanMode::Ack,
                 PortStatus::Unfiltered,
                 Duration::ZERO,
             )
@@ -188,6 +189,7 @@ async fn ack_worker_keeps_tcp_transport_and_other_results_when_a_task_fails() {
             .iter()
             .all(|result| result.transport == ScanMode::Tcp)
     );
+    assert!(results.iter().all(|result| result.method == ScanMode::Ack));
     assert_eq!(results[0].status, PortStatus::Unfiltered);
     assert_eq!(results[1].status, PortStatus::Unknown);
     assert!(
@@ -198,4 +200,39 @@ async fn ack_worker_keeps_tcp_transport_and_other_results_when_a_task_fails() {
             .contains("Probe task failed")
     );
     assert_eq!(results[2].status, PortStatus::Unfiltered);
+}
+
+#[tokio::test]
+async fn failed_tasks_keep_the_requested_method_and_derived_transport_for_every_mode() {
+    for (method, transport) in [
+        (ScanMode::Tcp, ScanMode::Tcp),
+        (ScanMode::Udp, ScanMode::Udp),
+        (ScanMode::Syn, ScanMode::Tcp),
+        (ScanMode::Ack, ScanMode::Tcp),
+    ] {
+        let results = run(
+            &[target(1883)],
+            1,
+            method,
+            |_| async { panic!("fixture failed probe") },
+            |completed, result| {
+                assert_eq!(completed, 1);
+                assert_eq!(result.method, method);
+                assert_eq!(result.transport, transport);
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(results.len(), 1);
+        let result = &results[0];
+        assert_eq!(result.port, 1883);
+        assert_eq!(result.method, method);
+        assert_eq!(result.transport, transport);
+        assert_eq!(result.status, PortStatus::Unknown);
+        assert_eq!(
+            result.error.as_deref(),
+            Some("Probe task failed; port state is undetermined")
+        );
+    }
 }

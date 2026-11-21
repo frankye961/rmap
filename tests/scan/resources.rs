@@ -95,6 +95,7 @@ async fn a_reduced_budget_still_schedules_every_port_in_a_full_scan() {
                 active.fetch_sub(1, Ordering::SeqCst);
                 ScanResult {
                     port: target.port(),
+                    method: ScanMode::Tcp,
                     transport: ScanMode::Tcp,
                     status: if open_ports.contains(&target.port()) {
                         PortStatus::Open

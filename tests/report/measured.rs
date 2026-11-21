@@ -128,6 +128,7 @@ fn displays_smb_dialect_as_protocol_evidence_without_a_software_version() {
         crate::mapper::service_information::map_tcp_service("smb", None, None, Some(detail));
     let mut result = ScanResult {
         port: 445,
+        method: ScanMode::Tcp,
         transport: ScanMode::Tcp,
         status: PortStatus::Open,
         service: None,
@@ -155,6 +156,7 @@ fn displays_mapped_rpc_information_without_a_fabricated_software_version() {
     let information = crate::mapper::service_information::map_portmapper_service(100000, 2);
     let mut result = ScanResult {
         port: 111,
+        method: ScanMode::Tcp,
         transport: ScanMode::Tcp,
         status: PortStatus::Open,
         service: None,
@@ -198,6 +200,7 @@ fn syn_cleanup_diagnostic_is_visible_without_erasing_the_open_state() {
 fn reports_transport_uncertainty_and_elapsed_time() {
     let mut result = ScanResult {
         port: 53,
+        method: ScanMode::Udp,
         transport: ScanMode::Udp,
         status: PortStatus::OpenOrFiltered,
         service: None,
@@ -225,6 +228,7 @@ fn shows_safe_banner_preview_and_preserves_full_bytes_and_stop_reason() {
     bytes.extend_from_slice(b"\r\n");
     let result = ScanResult {
         port: 22,
+        method: ScanMode::Tcp,
         transport: ScanMode::Tcp,
         status: PortStatus::Open,
         service: Some("ssh".into()),
@@ -246,6 +250,7 @@ fn shows_safe_banner_preview_and_preserves_full_bytes_and_stop_reason() {
 fn strips_banner_line_ending_without_quotes_or_empty_reason() {
     let result = ScanResult {
         port: 22,
+        method: ScanMode::Tcp,
         transport: ScanMode::Tcp,
         status: PortStatus::Open,
         service: Some("ssh".into()),
@@ -271,6 +276,7 @@ fn measured_results() -> Vec<ScanResult> {
     .enumerate()
     .map(|(index, status)| ScanResult {
         port: index as u16 + 1,
+        method: ScanMode::Udp,
         transport: ScanMode::Udp,
         status,
         service: None,
