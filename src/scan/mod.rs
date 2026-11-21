@@ -7,6 +7,7 @@ use crate::model::{ScanMode, ScanResult};
 use crate::settings::MAX_CONCURRENCY;
 
 mod ack;
+mod fin;
 mod http;
 mod identify;
 mod nfs;
