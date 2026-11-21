@@ -32,6 +32,7 @@ async fn unsupported_target_is_a_local_failure_without_service_evidence() {
 
     assert_eq!(result.port, 443);
     assert_eq!(result.transport, ScanMode::Tcp);
+    assert_eq!(result.method, ScanMode::Ack);
     assert_eq!(result.status, PortStatus::Unknown);
     assert_eq!(
         result.error.as_deref(),

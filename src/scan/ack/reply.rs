@@ -109,7 +109,7 @@ where
     let _outcome = wait_for_ack_reply(_probe, _deadline, &mut _receive).await;
     let mut _result = ScanResult::new(
         _probe.destination.port(),
-        ScanMode::Tcp,
+        ScanMode::Ack,
         PortStatus::Unknown,
         _started.elapsed(),
     );

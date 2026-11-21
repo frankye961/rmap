@@ -21,8 +21,8 @@ fn raw_socket_permission_errors_explain_privileges_and_preserve_other_errors() {
     assert!(other.contains("Cannot prepare raw TCP socket"));
     assert!(!other.contains("requires raw-socket privileges"));
 }
-use crate::model::PortStatus;
 use crate::model::syn::{ParsedIpv4Packet, SynProbe};
+use crate::model::{PortStatus, ScanMode};
 use socket2::{Domain, Socket, Type};
 use tokio::io::unix::AsyncFd;
 
@@ -230,7 +230,8 @@ async fn flow_skips_bad_and_unrelated_packets_and_preserves_open_on_cleanup_fail
     assert_eq!(reads.get(), 4);
     assert_eq!(cleanups.get(), 1);
     assert_eq!(result.port, 80);
-    assert_eq!(result.transport, crate::model::ScanMode::Tcp);
+    assert_eq!(result.transport, ScanMode::Tcp);
+    assert_eq!(result.method, ScanMode::Syn);
     assert_eq!(result.status, PortStatus::Open);
     assert!(result.error.is_none());
     assert!(result.observation.unwrap().contains("RST cleanup failed"));
@@ -253,6 +254,8 @@ async fn flow_reports_closed_without_cleanup() {
     )
     .await;
     assert_eq!(result.status, PortStatus::Closed);
+    assert_eq!(result.method, ScanMode::Syn);
+    assert_eq!(result.transport, ScanMode::Tcp);
     assert_eq!(cleanups.get(), 0);
     assert!(result.error.is_none());
     assert!(result.observation.unwrap().contains("RST/ACK"));
@@ -269,6 +272,8 @@ async fn flow_bounds_silence_and_preserves_local_receive_errors() {
     )
     .await;
     assert_eq!(silent.status, PortStatus::Filtered);
+    assert_eq!(silent.method, ScanMode::Syn);
+    assert_eq!(silent.transport, ScanMode::Tcp);
     assert!(silent.error.unwrap().contains("unconfirmed"));
 
     let failure = finish_syn_probe(
@@ -284,6 +289,8 @@ async fn flow_bounds_silence_and_preserves_local_receive_errors() {
     )
     .await;
     assert_eq!(failure.status, PortStatus::Unknown);
+    assert_eq!(failure.method, ScanMode::Syn);
+    assert_eq!(failure.transport, ScanMode::Tcp);
     assert!(failure.error.unwrap().contains("receive failed"));
 }
 

@@ -4,17 +4,40 @@ use rig::http_client::Error as HttpError;
 use super::describe_ai_error;
 
 #[test]
+fn ai_context_distinguishes_methods_even_when_state_and_detail_do_not_identify_them() {
+    use crate::model::{PortStatus, ScanMode, ScanResult};
+    use std::time::Duration;
+
+    for (method, transport, label) in [
+        (ScanMode::Tcp, "tcp", "tcp"),
+        (ScanMode::Udp, "udp", "udp"),
+        (ScanMode::Syn, "tcp", "syn"),
+        (ScanMode::Ack, "tcp", "ack"),
+    ] {
+        let mut result = ScanResult::new(1883, method, PortStatus::Unknown, Duration::ZERO);
+        result.error = Some("fixture local failure".into());
+        let prompt = super::build_prompt(&[result], &[]);
+
+        assert!(prompt.contains(&format!(
+            "1883/{transport}: state Unknown; service label unknown"
+        )));
+        assert!(prompt.contains(&format!("\n  Scan method: {label}\n")));
+        assert!(prompt.contains("fixture local failure"));
+    }
+}
+
+#[test]
 fn ack_context_preserves_reset_and_timeout_uncertainty_without_service_claims() {
     use crate::model::{PortStatus, ScanMode, ScanResult};
     use std::time::Duration;
 
-    let mut reset = ScanResult::new(443, ScanMode::Tcp, PortStatus::Unfiltered, Duration::ZERO);
+    let mut reset = ScanResult::new(443, ScanMode::Ack, PortStatus::Unfiltered, Duration::ZERO);
     reset.observation = Some(
         "Matching TCP RST received in response to ACK probe; service state is undetermined".into(),
     );
     let mut silent = ScanResult::new(
         80,
-        ScanMode::Tcp,
+        ScanMode::Ack,
         PortStatus::Filtered,
         Duration::from_secs(1),
     );
@@ -24,6 +47,7 @@ fn ack_context_preserves_reset_and_timeout_uncertainty_without_service_claims() 
     assert!(prompt.contains("service state is undetermined"));
     assert!(prompt.contains("80/tcp: state Filtered; service label unknown"));
     assert!(prompt.contains("ACK receive timed out; filtering is unconfirmed"));
+    assert_eq!(prompt.matches("\n  Scan method: ack\n").count(), 2);
     assert!(!prompt.contains("state Open"));
 }
 
@@ -36,6 +60,7 @@ fn includes_smb_dialect_without_inventing_a_software_version_in_ai_context() {
     let detail = "SMB protocol dialect 0x0210 negotiated successfully";
     let result = ScanResult {
         port: 445,
+        method: ScanMode::Tcp,
         transport: ScanMode::Tcp,
         status: PortStatus::Open,
         service: Some("smb".into()),
@@ -82,6 +107,7 @@ fn udp_observations_keep_their_transport() {
 
     let result = ScanResult {
         port: 53,
+        method: ScanMode::Udp,
         transport: ScanMode::Udp,
         status: PortStatus::Open,
         service: None,
@@ -106,6 +132,7 @@ fn closed_and_uncertain_ports_are_still_measured_observations() {
         .into_iter()
         .map(|(port, status)| ScanResult {
             port,
+            method: ScanMode::Udp,
             transport: ScanMode::Udp,
             status,
             service: None,
@@ -132,6 +159,7 @@ fn research_reads_banner_beyond_console_preview_and_keeps_stop_reason() {
     bytes.extend_from_slice(b"220 (vsFTPd 3.0.5)");
     let result = ScanResult {
         port: 21,
+        method: ScanMode::Tcp,
         transport: ScanMode::Tcp,
         status: PortStatus::Open,
         service: None,
@@ -156,6 +184,7 @@ fn includes_structured_ssh_software_and_version_in_research_context() {
 
     let result = ScanResult {
         port: 2222,
+        method: ScanMode::Tcp,
         transport: ScanMode::Tcp,
         status: PortStatus::Open,
         service: Some("ssh".into()),

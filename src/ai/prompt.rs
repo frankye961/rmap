@@ -55,12 +55,13 @@ fn append_observation(prompt: &mut String, result: &ScanResult) {
         .take(MAX_DETAIL_CHARS)
         .collect();
     prompt.push_str(&format!(
-        "- {}/{}: state {:?}; service label {}; detail: {}\n",
+        "- {}/{}: state {:?}; service label {}; detail: {}\n  Scan method: {}\n",
         result.port,
         result.transport.as_str(),
         result.status,
         result.service.as_deref().unwrap_or("unknown"),
-        detail.replace(['\r', '\n'], " ")
+        detail.replace(['\r', '\n'], " "),
+        result.method.as_str()
     ));
     if let Some(information) = &result.service_information {
         prompt.push_str(&format!(

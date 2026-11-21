@@ -394,6 +394,7 @@ async fn finished_probe_records_reset_as_unfiltered_without_application_evidence
 
     assert_eq!(result.port, probe.destination.port());
     assert_eq!(result.transport, ScanMode::Tcp);
+    assert_eq!(result.method, ScanMode::Ack);
     assert_eq!(result.status, PortStatus::Unfiltered);
     assert!(result.error.is_none());
     let observation = result.observation.as_deref().unwrap();
@@ -420,6 +421,7 @@ async fn finished_probe_records_silence_as_tentative_filtering() {
 
     assert_eq!(result.port, probe.destination.port());
     assert_eq!(result.transport, ScanMode::Tcp);
+    assert_eq!(result.method, ScanMode::Ack);
     assert_eq!(result.status, PortStatus::Filtered);
     let error = result.error.as_deref().unwrap();
     assert!(error.contains("timed out"));
@@ -451,6 +453,8 @@ async fn finished_probe_preserves_a_receiver_timeout_without_starting_another_re
 
     assert_eq!(reads.get(), 1);
     assert_eq!(result.status, PortStatus::Filtered);
+    assert_eq!(result.method, ScanMode::Ack);
+    assert_eq!(result.transport, ScanMode::Tcp);
     let error = result.error.as_deref().unwrap();
     assert!(error.contains("fixture receiver timeout"));
     assert!(error.contains("filtering is unconfirmed"));
@@ -472,6 +476,7 @@ async fn finished_probe_keeps_local_io_failures_unknown_and_preserves_the_error(
 
         assert_eq!(result.port, probe.destination.port());
         assert_eq!(result.transport, ScanMode::Tcp);
+        assert_eq!(result.method, ScanMode::Ack);
         assert_eq!(result.status, PortStatus::Unknown);
         assert_eq!(
             result.error.as_deref(),

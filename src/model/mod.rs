@@ -51,14 +51,16 @@ pub struct ScanResult {
     /// Advertised registrations, separate from measured port states.
     /// None means no successful enumeration; Some(empty) means an empty DUMP result.
     pub rpc_mappings: Option<Vec<RpcMapping>>,
+    /// Scan technique that produced this observation, separate from its transport.
+    pub method: ScanMode,
 }
 
 impl ScanResult {
-    /// Start with measured connection fields and no inferred service or response evidence.
-    pub fn new(port: u16, transport: ScanMode, status: PortStatus, elapsed: Duration) -> Self {
+    /// Retain the scan method and derive its transport, without inferred service evidence.
+    pub fn new(port: u16, method: ScanMode, status: PortStatus, elapsed: Duration) -> Self {
         Self {
             port,
-            transport,
+            transport: method.transport(),
             status,
             elapsed,
             service: None,
@@ -67,6 +69,7 @@ impl ScanResult {
             banner: None,
             service_information: None,
             rpc_mappings: None,
+            method,
         }
     }
 }
@@ -85,3 +88,7 @@ pub enum PortStatus {
 }
 
 pub use ai::{AiAnalysis, CveCandidate, WebSource};
+
+#[cfg(test)]
+#[path = "../../tests/model/scan_result.rs"]
+mod tests;
